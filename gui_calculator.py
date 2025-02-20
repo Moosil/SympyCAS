@@ -14,6 +14,14 @@ prev_calculation = ""
 text_calculation = ""
 Ans = symbols("Ans")
 
+dvd_logo_toggle = False
+def toggle_dvd_logo():
+	global dvd_logo_toggle
+	dvd_logo_toggle = not dvd_logo_toggle
+	if dvd_logo_toggle:
+		move_window()
+	
+
 
 symbols_mem: dict[str, Symbol] = {}
 relations_mem: dict = {}
@@ -100,7 +108,7 @@ def solve(exact: bool = True) -> None:
 			
 			prev_calculation = symbol_equation
 			obj = BytesIO()
-			preview(symbol_equation, viewer='BytesIO', output='png', outputbuffer=obj, dvioptions=["-bd", "0", "-fg", f"RGB {hex_to_rgb(Text)}", "-bg", f"RGB {hex_to_rgb(Base)}", "-D", "240"])
+			preview(symbol_equation, viewer='BytesIO', output='png', outputbuffer=obj, dvioptions=["-bd", "0", "-fg", f"RGB {hex_to_rgb(Text)}", "-bg", f"RGB {hex_to_rgb(Base)}", "-D", "180"])
 			obj.seek(0)
 			text_area[1].img = ImageTk.PhotoImage(Image.open(obj))
 			text_area[1].config(image=text_area[1].img)
@@ -141,19 +149,19 @@ def add_to_calc(val: str | int) -> None:
 	val = str(val)
 	
 	if len(val) != 0:
-		if val in exacts:
+		if val in needs_coefficients:
 			if len(text_calculation) - 1 >= cursor_pos + 1 >= 0 and \
-			(text_calculation[cursor_pos + 1].isdigit() or text_calculation[cursor_pos - 1] in exacts or text_calculation[cursor_pos + 1] == "("):
+			(text_calculation[cursor_pos + 1].isdigit() or text_calculation[cursor_pos - 1] in needs_coefficients or text_calculation[cursor_pos + 1] == "("):
 				suffix = "*"
 			if len(text_calculation) - 1 >= cursor_pos - 1 >= 0 and \
-			(text_calculation[cursor_pos - 1].isdigit() or text_calculation[cursor_pos - 1] in exacts or text_calculation[cursor_pos - 1] == ")"):
+			(text_calculation[cursor_pos - 1].isdigit() or text_calculation[cursor_pos - 1] in needs_coefficients or text_calculation[cursor_pos - 1] == ")"):
 				prefix = "*"
 		elif val.isdigit():
 			if len(text_calculation) - 1 >= cursor_pos + 1 >= 0 and \
-					(text_calculation[cursor_pos - 1] in exacts or text_calculation[cursor_pos + 1] == "("):
+					(text_calculation[cursor_pos - 1] in needs_coefficients or text_calculation[cursor_pos + 1] == "("):
 				suffix = "*"
 			if len(text_calculation) - 1 >= cursor_pos - 1 >= 0 and \
-					(text_calculation[cursor_pos - 1] in exacts or text_calculation[cursor_pos - 1] == ")"):
+					(text_calculation[cursor_pos - 1] in needs_coefficients or text_calculation[cursor_pos - 1] == ")"):
 				prefix = "*"
 	
 	text_calculation = text_calculation[:cursor_pos] + prefix + val + suffix + text_calculation[cursor_pos:]
@@ -230,6 +238,7 @@ repl = {
 	"*": "×",
 	"E": "e",
 	"**": "^",
+	"sqrt": "√"
 }
 
 max_repl = max([len(key) for key in repl.keys()])
@@ -263,7 +272,11 @@ commands = {
 	"≈": lambda: solve(False),
 	"C": clear_calc,
 	"⌫": backspace_calc,
+	"📀": toggle_dvd_logo,
 }
+
+needs_coefficients = list(exacts.keys()) + \
+	list(functions.keys()) + ["sqrt("]
 
 font: str = "Calibri"
 font_size: int = 24
@@ -298,14 +311,17 @@ rows: int = 5
 
 root = tk.Tk()
 root.title("Calculator")
-root.geometry(f"{70*base}x{41*2+64*rows}")
-root.minsize(70*base, 41*2+64*rows)
+root.geometry(f"{70*base}x{41*3+64*rows}")
+root.minsize(70*base, 41*3+64*rows)
 root.configure(bg=Base)
 
 
 screen_size = (root.winfo_screenwidth(), root.winfo_screenheight())
 
 def move_window():
+	global dvd_logo_toggle
+	if not dvd_logo_toggle:
+		return
 	new_pos = (root.winfo_x() + screen_direction[0], root.winfo_y() + screen_direction[1])
 	screen_width = screen_size[0] - root.winfo_width()
 	screen_height = screen_size[1] - root.winfo_height() - taskbar_height
@@ -377,8 +393,8 @@ for i, names in enumerate(UI_order):
 		btn.grid(row=i+1, column=j)
 		btns.append(btn)
 
-for i, command in enumerate(commands):
-	btn = HoverButton(button_area, text=command, command=(commands[command]))
+for i, (name, cmd) in enumerate(commands.items()):
+	btn = HoverButton(button_area, text=name, command=cmd)
 	btn.grid(row=4, column=i)
 	btns.append(btn)
 
@@ -389,6 +405,6 @@ for i, btn in enumerate(btns):
 	)
 
 
-# move_window()
+move_window()
 root.mainloop()
 
