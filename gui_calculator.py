@@ -1,19 +1,26 @@
-import math
 import threading
+
 from win32api import GetMonitorInfo, MonitorFromPoint
 import tkinter as tk
 from sympy import *
+from io import BytesIO
+from PIL import Image, ImageTk
+
+init_printing(full_prec=False)
 
 screen_direction = [1, 1]
 
 prev_calculation = ""
 text_calculation = ""
-calculation_brackets: list[int] = []
 Ans = symbols("Ans")
 
 
 symbols_mem: dict[str, Symbol] = {}
 relations_mem: dict = {}
+
+def hex_to_rgb(hex_str) -> str:
+    hex_str = hex_str.lstrip('#')
+    return f"{int(hex_str[0:2], 16)} {int(hex_str[2:4], 16)} {int(hex_str[4:6], 16)}"
 
 def combine_hex_values(d):
 	# from (https://stackoverflow.com/questions/61488790/how-can-i-proportionally-mix-colors-in-python)
@@ -30,8 +37,7 @@ def get_taskbar_height() -> int:
 	monitor_info = GetMonitorInfo(MonitorFromPoint((0,0)))
 	monitor_area = monitor_info.get("Monitor")
 	work_area = monitor_info.get("Work")
-	taskbar_height = monitor_area[3]-work_area[3]
-	return taskbar_height
+	return monitor_area[3]-work_area[3]
 
 taskbar_height = get_taskbar_height()
 
@@ -59,28 +65,51 @@ def tokenise(string: str) -> list[str]:
 def solve(exact: bool = True) -> None:
 	global prev_calculation
 	global text_calculation
+	global cursor_pos
 	idx: int = 0
 	parsed: list[str] = []
 	expression_type: str = "equation"
 	has_ans: bool = False
+	
+	# Add in brackets that are not closed
+	brackets, left, right = get_brackets(text_calculation)
+	if left > 0:
+		text_calculation += "".join([")" for _i in range(left)])
+	if right > 0:
+		text_calculation = "".join(["(" for _i in range(right)]) + text_calculation
+	
 	for token in tokenise(text_calculation):
 		match token:
 			case ":=":
 				expression_type = "define"
 			case "Ans":
 				has_ans = True
+			case token if token.isalpha():
+				symbols_mem[token] = symbols(token)
 		parsed.append(token)
 		idx += len(token)
 	
 	match expression_type:
 		case "equation":
 			symbol_equation = sympify(text_calculation)
+			
 			if has_ans:
 				symbol_equation = sympify(symbol_equation).subs(Ans, prev_calculation)
-			if not exact:
-				symbol_equation = symbol_equation.evalf()
+			for fn_name, fn_symbolic in relations_mem:
+				symbol_equation = sympify(symbol_equation).subs(fn_name, fn_symbolic)
+			
 			prev_calculation = symbol_equation
-			text_calculation = str(prev_calculation)
+			obj = BytesIO()
+			preview(symbol_equation, viewer='BytesIO', output='png', outputbuffer=obj, dvioptions=["-bd", "0", "-fg", f"RGB {hex_to_rgb(Text)}", "-bg", f"RGB {hex_to_rgb(Base)}", "-D", "240"])
+			obj.seek(0)
+			text_area[1].img = ImageTk.PhotoImage(Image.open(obj))
+			text_area[1].config(image=text_area[1].img)
+			
+			if not exact:
+				symbol_equation = symbol_equation.evalf().simplify().normal()
+			
+			text_calculation = str(symbol_equation)
+			cursor_pos = len(text_calculation)
 			update_text_calculation()
 		case "define":
 			idx: int = 0
@@ -97,7 +126,9 @@ def solve(exact: bool = True) -> None:
 				idx += 1
 			idx += 1
 			
-			relations_mem[name] = "".join(parsed[idx:])
+			relations_mem[name] = sympify("".join(parsed[idx:]))
+			text_calculation = ""
+			cursor_pos = 0
 			update_text_calculation("Done")
 
 cursor_pos: int = 0
@@ -105,28 +136,25 @@ cursor_pos: int = 0
 def add_to_calc(val: str | int) -> None:
 	global text_calculation
 	global cursor_pos
-	global calculation_brackets
 	prefix: str = ""
 	suffix: str = ""
 	val = str(val)
 	
 	if len(val) != 0:
-		if val.isdigit() or val in exacts:
+		if val in exacts:
 			if len(text_calculation) - 1 >= cursor_pos + 1 >= 0 and \
 			(text_calculation[cursor_pos + 1].isdigit() or text_calculation[cursor_pos - 1] in exacts or text_calculation[cursor_pos + 1] == "("):
 				suffix = "*"
 			if len(text_calculation) - 1 >= cursor_pos - 1 >= 0 and \
 			(text_calculation[cursor_pos - 1].isdigit() or text_calculation[cursor_pos - 1] in exacts or text_calculation[cursor_pos - 1] == ")"):
 				prefix = "*"
-		
-		if val[len(val) - 1] == "(":
-			calculation_brackets.append(cursor_pos + len(prefix) + len(val) - 1)
-		elif val[len(val) - 1] == ")":
-			idx: int = cursor_pos + len(prefix) + len(val) - 1
-			for i in range(len(calculation_brackets)-1, -1, -1):
-				if calculation_brackets[i] < idx:
-					calculation_brackets.pop(i)
-					break
+		elif val.isdigit():
+			if len(text_calculation) - 1 >= cursor_pos + 1 >= 0 and \
+					(text_calculation[cursor_pos - 1] in exacts or text_calculation[cursor_pos + 1] == "("):
+				suffix = "*"
+			if len(text_calculation) - 1 >= cursor_pos - 1 >= 0 and \
+					(text_calculation[cursor_pos - 1] in exacts or text_calculation[cursor_pos - 1] == ")"):
+				prefix = "*"
 	
 	text_calculation = text_calculation[:cursor_pos] + prefix + val + suffix + text_calculation[cursor_pos:]
 	update_text_calculation()
@@ -135,40 +163,44 @@ def add_to_calc(val: str | int) -> None:
 def update_text_calculation(calc: str | None = None) -> None:
 	global text_calculation
 	calc = str(calc if calc is not None else text_calculation)
-	text_area[1].delete(1.0, tk.END)
-	text_area[1].insert(1.0, beautify_str(calc))
+	text_area[0].delete(1.0, tk.END)
+	text_area[0].insert(1.0, beautify_str(calc))
 	brackets, left, right = get_brackets(text_calculation)
 	for bracket in brackets:
-		text_area[1].tag_add(rainbow[bracket[1]], f"1.{bracket[0]}", f"1.{bracket[0] + 1}")
+		text_area[0].tag_add(rainbow[bracket[1]], f"1.{bracket[0]}", f"1.{bracket[0] + 1}")
 	if left > 0:
-		text_area[1].insert("1.end", "".join([")" for _i in range(left)]))
-		text_area[1].tag_add(Overlay1, f"1.end-{left}c", "1.end")
+		text_area[0].insert("1.end", "".join([")" for _i in range(left)]))
+		text_area[0].tag_add(Overlay1, f"1.end-{left}c", "1.end")
 	if right > 0:
-		text_area[1].insert("1.0", "".join(["(" for _i in range(right)]))
-		text_area[1].tag_add(Overlay1, f"1.0", f"1.{right}")
+		text_area[0].insert("1.0", "".join(["(" for _i in range(right)]))
+		text_area[0].tag_add(Overlay1, f"1.0", f"1.{right}")
+
+def backspace_calc(calc: str | None = None) -> None:
+	global text_calculation
+	global cursor_pos
+	text_calculation = text_calculation[:cursor_pos - 1] + text_calculation[cursor_pos:]
+	cursor_pos -= 1
+	update_text_calculation()
 
 def clear_calc() -> None:
 	global text_calculation
 	text_calculation = ""
-	text_area[1].delete(1.0, tk.END)
-
-
-def mult(lhs: int, rhs: int) -> int:
-	return lhs * rhs
-
+	text_area[0].delete(1.0, tk.END)
 
 def beautify_str(string: str) -> str:
 	new_string: str = ""
-	for char in string:
+	i: int = 0
+	while i <= len(string) - 1:
 		added: bool = False
-		for replace in repl:
-			if replace[0] == char:
-				new_string += replace[1]
+		for j in range(max_repl, 0, -1):
+			if i+j <= len(string) and string[i:i+j] in repl:
+				new_string += repl[string[i:i+j]]
+				i += j - 1
 				added = True
 				break
 		if not added:
-			new_string += char
-	
+			new_string += string[i]
+		i += 1
 	return new_string
 
 def get_brackets(string: str) -> tuple[list[tuple[int, int]], int, int]:
@@ -191,41 +223,46 @@ def get_brackets(string: str) -> tuple[list[tuple[int, int]], int, int]:
 				brackets_list.append((i, -unclosed_right_brackets))
 	return brackets_list, unclosed_left_brackets, unclosed_right_brackets
 	
-
 base = 10
 
-repl = [
-	("/", "÷"),
-	("*", "×"),
-	("E", "e")
-]
+repl = {
+	"/": "÷",
+	"*": "×",
+	"E": "e",
+	"**": "^",
+}
 
-modifiers = [
-	"(",
-	")",
-]
+max_repl = max([len(key) for key in repl.keys()])
 
-functions = [
-	"sin",
-]
+modifiers = {
+	"+": "+",
+	"-": "-",
+	"/": "÷",
+	"*": "×",
+	"**(": "⬚^",
+	"**2)": "⬚²",
+	"sqrt(": "√⬚",
+	"(": "(",
+	")": ")",
+}
 
-exacts = [
-	"π",
-	"Ans",
-	"E"
-]
+functions = {
+	"sin(": "sin",
+	"cos(": "cos",
+	"tan(": "tan",
+}
 
-dmas = [
-	"/",
-	"*",
-	"+",
-	"-"
-]
+exacts = {
+	"π": "π",
+	"Ans": "Ans",
+	"E": "e",
+}
 
 commands = {
 	"=": solve,
-	"≈": lambda: solve(True),
+	"≈": lambda: solve(False),
 	"C": clear_calc,
+	"⌫": backspace_calc,
 }
 
 font: str = "Calibri"
@@ -257,12 +294,14 @@ Base="#1e1e2e"
 Mantle="#181825"
 Crust="#11111b"
 rainbow = [Red, Peach, Yellow, Green, Teal, Sky, Sapphire, Blue, Mauve, Lavender, Pink, Maroon]
+rows: int = 5
 
 root = tk.Tk()
 root.title("Calculator")
-root.geometry(f"{70*base}x{378}")
-root.minsize(70*base, 378)
+root.geometry(f"{70*base}x{41*2+64*rows}")
+root.minsize(70*base, 41*2+64*rows)
 root.configure(bg=Base)
+
 
 screen_size = (root.winfo_screenwidth(), root.winfo_screenheight())
 
@@ -283,21 +322,29 @@ def move_window():
 class TextArea(tk.Frame):
 	def __init__(self, master = None, **kwargs):
 		super().__init__(master, **kwargs)
-		self.lines = [tk.Text(self, height=1, width=16, font=(font, font_size), bg=Base, fg=Text, highlightthickness=0, borderwidth=0) for _i in range(3)]
-		for line in self.lines:
-			line.pack(expand=True, fill="both")
-			for colour in rainbow:
-				line.tag_config(colour, foreground=colour)
-			line.tag_config(Overlay1, foreground=Overlay1)
+		self.lines: list[tk.Text | tk.Label] = [
+			tk.Text(self, height=1, width=16, font=(font, font_size), bg=Base, fg=Text, highlightthickness=0, borderwidth=0),
+			tk.Label(self, height=3, width=16, bg=Base, fg=Text, highlightthickness=0, borderwidth=0)
+		]
+		self.lines[0].grid(column=0, row=0, sticky=tk.EW)
+		self.lines[1].grid(column=0, row=1, sticky=tk.NSEW)
+		
+		for colour in rainbow:
+			self.lines[0].tag_config(colour, foreground=colour)
+		self.lines[0].tag_config(Overlay1, foreground=Overlay1)
+		self.grid_columnconfigure(0, weight=1)
+		self.grid_rowconfigure(1, weight=1)
 	
 	def __getitem__(self, item):
 		return self.lines[item]
 			
 
 text_area = TextArea(root, bg=Base)
-text_area.pack(expand=True, fill="both")
+text_area.grid(column=0, row=0, sticky=tk.NSEW)
 button_area = tk.Frame(root, bg=Base)
-button_area.pack()
+button_area.grid(column=0, row=1, sticky=tk.EW)
+root.grid_rowconfigure(0, weight=1)
+root.grid_columnconfigure(0, weight=1)
 btns: list[tk.Button] = []
 
 class HoverButton(tk.Button):
@@ -306,30 +353,33 @@ class HoverButton(tk.Button):
 		self.bind("<Enter>", self.on_enter)
 		self.bind("<Leave>", self.on_leave)
 	
-	def on_enter(self, e):
+	def on_enter(self, _e):
 		self['background'] = Overlay0
 	
-	def on_leave(self, e):
+	def on_leave(self, _e):
 		self['background'] = Surface0
-
+  
 for i in range(base):
 	btn = HoverButton(button_area, text=str(i), command=lambda i=i: add_to_calc(i))
 	btn.grid(row=0, column=i)
 	btns.append(btn)
 
-for i, modifier in enumerate(dmas + modifiers + exacts):
-	btn = HoverButton(button_area, text=beautify_str(modifier), command=lambda modifier=modifier: add_to_calc(modifier))
-	btn.grid(row=1, column=i)
-	btns.append(btn)
+UI_order: list = \
+[
+	modifiers,
+	exacts,
+	functions,
+]
 
-for i, modifier in enumerate(functions):
-	btn = HoverButton(button_area, text=beautify_str(modifier), command=lambda modifier=modifier: add_to_calc(modifier + "("))
-	btn.grid(row=2, column=i)
-	btns.append(btn)
+for i, names in enumerate(UI_order):
+	for j, (plain, fancy) in enumerate(names.items()):
+		btn = HoverButton(button_area, text=fancy, command=lambda plain=plain: add_to_calc(plain))
+		btn.grid(row=i+1, column=j)
+		btns.append(btn)
 
 for i, command in enumerate(commands):
 	btn = HoverButton(button_area, text=command, command=(commands[command]))
-	btn.grid(row=3, column=i)
+	btn.grid(row=4, column=i)
 	btns.append(btn)
 
 for i, btn in enumerate(btns):
@@ -337,6 +387,7 @@ for i, btn in enumerate(btns):
 		fg=rainbow[i % len(rainbow)],
 		activebackground=rainbow[i % len(rainbow)],
 	)
+
 
 # move_window()
 root.mainloop()
