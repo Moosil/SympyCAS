@@ -2,11 +2,18 @@ import math
 import threading
 from win32api import GetMonitorInfo, MonitorFromPoint
 import tkinter as tk
+from sympy import *
 
 screen_direction = [1, 1]
 
-calculation = ""
-ans: str = "0"
+prev_calculation = ""
+text_calculation = ""
+calculation_brackets: list[int] = []
+Ans = symbols("Ans")
+
+
+symbols_mem: dict[str, Symbol] = {}
+relations_mem: dict = {}
 
 def get_taskbar_height() -> int:
 	# from (https://stackoverflow.com/questions/4357258/how-to-get-the-height-of-windows-taskbar-using-python-pyqt-win32)
@@ -18,38 +25,146 @@ def get_taskbar_height() -> int:
 
 taskbar_height = get_taskbar_height()
 
+def tokenise(string: str) -> list[str]:
+	prev_type: str = ""
+	curr: str = ""
+	tokens: list[str] = []
+	for char in string:
+		curr_type: str
+		if char.isdigit() or char == ".":
+			curr_type = "num"
+		elif char.isalpha():
+			curr_type = "alpha"
+		else:
+			curr_type = "symbol"
+		if curr_type == prev_type:
+			curr += char
+		elif prev_type != "":
+			tokens.append(curr)
+			curr = char
+		prev_type = curr_type
+	tokens.append(curr)
+	return tokens
 
+def solve(exact: bool = True) -> None:
+	global prev_calculation
+	global text_calculation
+	idx: int = 0
+	parsed: list[str] = []
+	expression_type: str = "equation"
+	has_ans: bool = False
+	for token in tokenise(text_calculation):
+		match token:
+			case ":=":
+				expression_type = "define"
+			case "Ans":
+				has_ans = True
+		parsed.append(token)
+		idx += len(token)
+	
+	match expression_type:
+		case "equation":
+			symbol_equation = sympify(text_calculation)
+			if has_ans:
+				symbol_equation = sympify(symbol_equation).subs(Ans, prev_calculation)
+			if not exact:
+				symbol_equation = symbol_equation.evalf()
+			prev_calculation = symbol_equation
+			text_calculation = str(prev_calculation)
+			update_text_calculation()
+		case "define":
+			idx: int = 0
+			name: str = ""
+			fn_args: list[str] = []
+			while parsed[idx] != "(":
+				name += parsed[idx]
+				idx += 1
+			
+			while parsed[idx] != ")" or parsed[idx] == ",)":
+				if parsed[idx].strip() != ",":
+					fn_args.append(parsed[idx])
+					symbols_mem[parsed[idx]] = symbols(parsed[idx])
+				idx += 1
+			idx += 1
+			
+			relations_mem[name] = "".join(parsed[idx:])
+			update_text_calculation("Done")
+
+cursor_pos: int = 0
 
 def add_to_calc(val: str | int) -> None:
-	global calculation
-	prefix = ""
-	if val == "(" and len(calculation) != 0 and calculation[len(calculation) - 1].isdigit():
-		prefix = "*"
-	calculation += prefix + str(val)
+	global text_calculation
+	global cursor_pos
+	global calculation_brackets
+	prefix: str = ""
+	suffix: str = ""
+	val = str(val)
+	
+	if len(val) != 0:
+		if val.isdigit() or val in exacts:
+			if len(text_calculation) - 1 >= cursor_pos + 1 >= 0 and \
+			(text_calculation[cursor_pos + 1].isdigit() or text_calculation[cursor_pos - 1] in exacts or text_calculation[cursor_pos + 1] == "("):
+				prefix = "*"
+			if len(text_calculation) - 1 >= cursor_pos - 1 >= 0 and \
+			(text_calculation[cursor_pos - 1].isdigit() or text_calculation[cursor_pos - 1] in exacts or text_calculation[cursor_pos - 1] == ")"):
+				suffix = "*"
+		
+		if val[len(val) - 1] == "(":
+			calculation_brackets.append(cursor_pos + len(prefix) + len(val) - 1)
+		elif val[len(val) - 1] == ")":
+			idx: int = cursor_pos + len(prefix) + len(val) - 1
+			for i in range(len(calculation_brackets)-1, -1, -1):
+				if calculation_brackets[i] < idx:
+					calculation_brackets.pop(idx)
+					break
+	
+	text_calculation = text_calculation[:cursor_pos] + prefix + val + suffix + text_calculation[cursor_pos:]
 	update_text_calculation()
+	cursor_pos += len(prefix) + len(val) + len(suffix)
 
-
-def update_text_calculation() -> None:
-	text_result.delete(1.0, tk.END)
-	text_result.insert(1.0, "".join([beautify(c) for c in calculation]))
+def update_text_calculation(calc: str | None = None) -> None:
+	global text_calculation
+	calc = str(calc if calc is not None else text_calculation)
+	text_area[1].insert(1.0, beautify_str(calc))
+	text_area[1].delete(1.0, tk.END)
 
 
 def clear_calc() -> None:
-	global calculation
-	calculation = ""
-	text_result.delete(1.0, tk.END)
+	global text_calculation
+	text_calculation = ""
+	text_area[1].delete(1.0, tk.END)
 
 
 def mult(lhs: int, rhs: int) -> int:
 	return lhs * rhs
 
 
-def beautify(symbol: str) -> str:
-	for b in repl:
-		if b[0] == symbol:
-			return b[1]
-	return symbol
+def beautify_str(string: str) -> str:
+	new_string: str = ""
+	added: bool = False
+	for char in string:
+		for replace in repl:
+			if replace[0] == char:
+				new_string += replace[1]
+				added = True
+				break
+		if not added:
+			new_string += char
+	
+	return new_string
 
+def get_brackets(string: str) -> list[tuple[int, int]]:
+	brackets: int = 0
+	brackets_list: list[tuple[int, int]] = []
+	for i, char in enumerate(string):
+		if char == "(":
+			brackets += 1
+			brackets_list.append((i, brackets))
+		elif char == ")":
+			brackets -= 1
+			brackets_list.append((i, brackets))
+	return brackets_list
+	
 
 base = 10
 
@@ -61,14 +176,17 @@ repl = [
 modifiers = [
 	"(",
 	")",
-	"Ans",
-	"sin(",
 ]
 
-exacts = {
-	"π": math.pi,
-	"e": math.e
-}
+functions = [
+	"sin",
+]
+
+exacts = [
+	"π",
+	"Ans",
+	"e"
+]
 
 dmas = [
 	"/",
@@ -115,8 +233,8 @@ rainbow = [Red, Peach, Yellow, Green, Teal, Sky, Sapphire, Blue, Mauve, Lavender
 
 root = tk.Tk()
 root.title("Calculator")
-root.geometry(f"{70*base}x{272}")
-root.minsize(70*base, 272)
+root.geometry(f"{70*base}x{496}")
+root.minsize(70*base, 496)
 root.configure(bg=Base)
 
 screen_size = (root.winfo_screenwidth(), root.winfo_screenheight())
@@ -134,16 +252,36 @@ def move_window():
 	root.geometry(f"+{new_pos[0]}+{new_pos[1]}")
 	timer = threading.Timer(0.001, move_window)
 	timer.start()
+	
+def on_key(line: tk.Text):
+	global text_calculation
+	brackets: list[tuple[int, int]] = get_brackets(text_calculation)
+	for bracket in brackets:
+		line.tag_add(rainbow[bracket[1]], f"1.{bracket[0]}", f"1.{bracket[0] + 1}")
 
-text_result = tk.Text(root, height=2, width=16, font=(font, font_size), bg=Base, fg=Text, highlightthickness=0, borderwidth=0)
-text_result.pack(expand=True, fill="both")
+class TextArea(tk.Frame):
+	def __init__(self, master = None, **kwargs):
+		super().__init__(master, **kwargs)
+		self.lines = [tk.Text(self, height=2, width=16, font=(font, font_size), bg=Base, fg=Text, highlightthickness=0, borderwidth=0) for _i in range(3)]
+		for line in self.lines:
+			line.pack(expand=True, fill="both")
+			line.bind("<Key>", lambda line=line: on_key(line))
+			for colour in rainbow:
+				line.tag_config(colour, foreground=colour)
+	
+	def __getitem__(self, item):
+		return self.lines[item]
+			
+
+text_area = TextArea(root, bg=Base)
+text_area.pack()
 button_area = tk.Frame(root, bg=Base)
 button_area.pack()
 btns: list[tk.Button] = []
 
 class HoverButton(tk.Button):
-	def __init__(self, master, **kw):
-		tk.Button.__init__(self,master=master, font=(font, font_size),width=4, bg=Surface0, activeforeground=Mantle, borderwidth=0, **kw)
+	def __init__(self, master, **kwargs):
+		tk.Button.__init__(self,master=master, font=(font, font_size),width=4, bg=Surface0, activeforeground=Mantle, borderwidth=0, **kwargs)
 		self.bind("<Enter>", self.on_enter)
 		self.bind("<Leave>", self.on_leave)
 	
@@ -158,14 +296,19 @@ for i in range(base):
 	btn.grid(row=0, column=i)
 	btns.append(btn)
 
-for i, modifier in enumerate(dmas + modifiers + list(exacts.keys())):
-	btn = HoverButton(button_area, text=beautify(modifier), command=lambda modifier=modifier: add_to_calc(modifier))
+for i, modifier in enumerate(dmas + modifiers + exacts):
+	btn = HoverButton(button_area, text=beautify_str(modifier), command=lambda modifier=modifier: add_to_calc(modifier))
 	btn.grid(row=1, column=i)
+	btns.append(btn)
+
+for i, modifier in enumerate(functions):
+	btn = HoverButton(button_area, text=beautify_str(modifier), command=lambda modifier=modifier: add_to_calc(modifier + "("))
+	btn.grid(row=2, column=i)
 	btns.append(btn)
 
 for i, command in enumerate(commands):
 	btn = HoverButton(button_area, text=command, command=(commands[command]))
-	btn.grid(row=2, column=i)
+	btn.grid(row=3, column=i)
 	btns.append(btn)
 
 for i, btn in enumerate(btns):
@@ -174,6 +317,6 @@ for i, btn in enumerate(btns):
 		activebackground=rainbow[i % len(rainbow)],
 	)
 
-move_window()
+# move_window()
 root.mainloop()
 
