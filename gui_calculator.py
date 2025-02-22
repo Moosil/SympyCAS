@@ -29,8 +29,8 @@ symbols_mem: dict[str, Symbol] = {}
 relations_mem: dict = {}
 
 def hex_to_rgb(hex_str) -> str:
-    hex_str = hex_str.lstrip('#')
-    return f"{int(hex_str[0:2], 16)} {int(hex_str[2:4], 16)} {int(hex_str[4:6], 16)}"
+	hex_str = hex_str.lstrip('#')
+	return f"{int(hex_str[0:2], 16)} {int(hex_str[2:4], 16)} {int(hex_str[4:6], 16)}"
 
 def combine_hex_values(d):
 	# from (https://stackoverflow.com/questions/61488790/how-can-i-proportionally-mix-colors-in-python)
@@ -106,7 +106,7 @@ def solve(exact: bool = True) -> None:
 			
 			if has_ans:
 				symbol_equation = sympify(symbol_equation).subs(Ans, prev_calculation)
-			for fn_name, fn_symbolic in relations_mem:
+			for fn_name, fn_symbolic in relations_mem.items():
 				symbol_equation = sympify(symbol_equation).subs(fn_name, fn_symbolic)
 			
 			prev_calculation = symbol_equation
@@ -140,7 +140,7 @@ def solve(exact: bool = True) -> None:
 			relations_mem[name] = sympify("".join(parsed[idx:]))
 			text_calculation = ""
 			cursor_pos = 0
-			update_text_calculation("Done", italic=range(0, 4), cursor=0)
+			update_text_calculation("Done", italic=(0, 4), cursor=0)
 
 cursor_pos: int = 0
 
@@ -359,7 +359,6 @@ class TextArea(tk.Frame):
 	
 	def __getitem__(self, item):
 		return self.lines[item]
-			
 
 text_area = TextArea(root, bg=Base)
 text_area.grid(column=0, row=0, sticky=tk.NSEW)
