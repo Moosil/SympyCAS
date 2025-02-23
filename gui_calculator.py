@@ -15,77 +15,18 @@ init_printing(full_prec=False)
 screen_direction = [1, 1]
 
 class Token:
-	def __init__(self, up: 'Token' = None, down: 'Token' = None, left: 'Token' = None, right: 'Token' = None, prev: 'Token' = None, next: 'Token' = None):
-		self.up = up
-		self.down = down
-		self.left = left
-		self.right = right
-		self.prev = prev
-		self.next = next
+	def __init__(self, children: list[list['Token']] = None) -> None:
+		self.children = children
 	
 	def __str__(self):
 		return "oops"
 	
-	def get_up(self) -> list['Token']:
-		if self.up is None:
-			return [self]
-		return [self] + self.up.get_up()
-	
-	def get_down(self) -> list['Token']:
-		if self.down is None:
-			return [self]
-		return [self] + self.down.get_down()
-	
-	def get_left(self) -> list['Token']:
-		if isinstance(self.left, StartToken):
-			return [self]
-		return [self] + self.left.get_left()
-	
-	def get_right(self) -> list['Token']:
-		if isinstance(self.right, EndToken):
-			return [self]
-		return [self] + self.right.get_right()
-	
 	def latex(self) -> str:
 		return "oops"
-
-class StartToken(Token):
-	def __str__(self):
-		return ""
-	
-	def latex(self) -> str:
-		return ""
-	
-class EndToken(Token):
-	def __str__(self):
-		return ""
-	
-	def latex(self) -> str:
-		return ""
-
-class FillableToken(Token):
-	def __str__(self):
-		return "⬚"
-	
-	def latex(self) -> str:
-		return "⬚"
-	
-	def replace_with(self, token: Token) -> None:
-		token.left = self.left
-		token.right = self.right
-		token.up = self.up
-		token.down = self.down
-		self.left.right = token
-		self.right.left = token
-		self.up.down = token
-		self.down.up = token
-		self.prev
-		del self
 
 class NumberToken(Token):
-	def __init__(self, val: int, up: Token = None, down: Token = None, left: Token = None, right: Token = None,
-	             prev: Token = None, next: Token = None):
-		super().__init__(up, down, left, right, prev, next)
+	def __init__(self, val: int, children: list[list[Token]] = None):
+		super().__init__(children)
 		self.val = val
 	
 	def add_to_end(self, digit: int) -> None:
@@ -99,9 +40,8 @@ class NumberToken(Token):
 		return str(self.val)
 
 class ExactToken(Token):
-	def __init__(self, val: str, up: Token = None, down: Token = None, left: Token = None, right: Token = None,
-	             prev: Token = None, next: Token = None):
-		super().__init__(up, down, left, right, prev, next)
+	def __init__(self, val: str, children: list[list[Token]] = None):
+		super().__init__(children)
 		self.val = val
 	
 	def __str__(self) -> str:
@@ -115,9 +55,8 @@ class ExactToken(Token):
 				return "e"
 
 class OperatorToken(Token):
-	def __init__(self, val: str, up: Token = None, down: Token = None, left: Token = None, right: Token = None,
-	             prev: Token = None, next: Token = None, take_previous: bool = False):
-		super().__init__(up, down, left, right, prev, next)
+	def __init__(self, val: str, take_previous: bool = False, children: list[list[Token]] = None):
+		super().__init__(children)
 		self.val = val
 		self.take_previous = take_previous
 	
@@ -132,7 +71,7 @@ class OperatorToken(Token):
 			case "/":
 				return "*"
 			case "⁄":
-				return f"( ({"".join([str(t) for t in self.up.get_right()])}) / ({"".join([str(t) for t in self.down.get_right()])}) )"
+				return f"( ({"".join([str(t) for t in self.children])}) / ({"".join([str(t) for t in self.children])}) )"
 			case _:
 				return "oops"
 	
@@ -147,31 +86,12 @@ class OperatorToken(Token):
 			case "/":
 				return r"\div"
 			case "⁄":
-				return r"\dfrac{"+token_to_latex(self.up.get_right())+"}{"+token_to_latex(self.up.get_right())+"}"
+				return r"\dfrac{"+token_to_latex(self.children)+"}{"+token_to_latex(self.children)+"}"
 			case _:
 				return "oops"
 
-class FractionToken(OperatorToken):
-	def __init__(self, val: str, up: Token = None, down: Token = None, left: Token = None, right: Token = None,
-	             prev: Token = None, next: Token = None):
-		if up is None:
-			up = StartToken()
-			up.right = FillableToken()
-			up.right.right = EndToken()
-			up.down = up
-			up.left = left
-		if down is None:
-			down = StartToken()
-			down.right = FillableToken()
-			down.right.right = EndToken()
-			down.up = up
-			down.left = left
-		super().__init__("⁄", up, down, left, right, prev, next, True)
-
-root_token: StartToken = StartToken()
-root_token.right = EndToken()
-root_token.right.left = root_token
-cursor_pos: Token = root_token
+calculation_tokens: Token = Token([[]])
+cursor_pos: list[tuple[int, int]] = [(0,0)]
 Ans = symbols("Ans")
 
 dvd_logo_toggle = False
@@ -210,11 +130,8 @@ taskbar_height = get_taskbar_height()
 def solve(exact: bool = True) -> None:
 	pass
 
-def token_to_latex(token: StartToken) -> str:
-	latex_str = ""
-	curr = token
-	while isinstance(curr, EndToken):
-
+def token_to_latex(tokens: list[Token]) -> str:
+	return " ".join([t.latex() for t in tokens])
 
 def token_to_latex_sympy() -> str:
 	str_tokens: str = "".join([str(token) for token in calculation_tokens])
@@ -222,41 +139,21 @@ def token_to_latex_sympy() -> str:
 	expr = parse_expr(str_tokens, evaluate=False, transformations=transformations)
 	return latex(expr, mul_symbol="times")
 
-def insert_token_between(token: Token, left: Token, right: Token) -> None:
-	token.left = left
-	token.right = right
-	left.right = token
-	right.left = token
-
-def remove_token(token: Token) -> None:
-	token.left.right = token.right
-	token.right.left = token.left
-	del token
-
 def add_to_calc(token: Token) -> None:
 	global cursor_pos
 	
+	cursor_token: Token = calculation_tokens
+	for pos in cursor_pos:
+		cursor_token = cursor_token.children[pos[0]][pos[1]]
+	
 	if isinstance(token, NumberToken): # If token to add is a Number Token
-		if isinstance(cursor_pos, NumberToken): # If previous token is Number Token, add onto it
-			cursor_pos.val *= 10
-			cursor_pos.val += token.val
-		elif isinstance(cursor_pos, OperatorToken): # If previous token is Operator Token,
+		if isinstance(cursor_token, NumberToken): # If previous token is Number Token, add onto it
+			cursor_token.val *= 10
+			cursor_token.val += token.val
+		elif isinstance(cursor_token, OperatorToken): # If previous token is Operator Token,
 			pass
-		elif isinstance(cursor_pos, StartToken): # If previous token is the start of the expression, add on to it
-			token.left = cursor_pos
-			cursor_pos.right = token
-			cursor_pos = token
 	elif isinstance(token, OperatorToken): # if val is an Operator Token
-		if isinstance(token, FractionToken):
-			if not isinstance(cursor_pos, StartToken):
-				insert_token_between(token.up, cursor_pos.left, cursor_pos.right)
-				token.down.left = cursor_pos.left
-				cursor_pos.right = cursor_pos.right
-				token.up.right.replace_with(cursor_pos)
-			else:
-				insert_token_between(token, cursor_pos, cursor_pos.right)
-		else:
-			insert_token_between(token, cursor_pos, cursor_pos.right)
+		pass
 	
 	latex_string = token_to_latex()
 	text_area.display_latex(latex_string)
