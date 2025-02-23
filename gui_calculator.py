@@ -15,11 +15,13 @@ init_printing(full_prec=False)
 screen_direction = [1, 1]
 
 class Token:
-	def __init__(self, up: 'Token' = None, down: 'Token' = None, left: 'Token' = None, right: 'Token' = None):
+	def __init__(self, up: 'Token' = None, down: 'Token' = None, left: 'Token' = None, right: 'Token' = None, prev: 'Token' = None, next: 'Token' = None):
 		self.up = up
 		self.down = down
 		self.left = left
 		self.right = right
+		self.prev = prev
+		self.next = next
 	
 	def __str__(self):
 		return "oops"
@@ -77,11 +79,13 @@ class FillableToken(Token):
 		self.right.left = token
 		self.up.down = token
 		self.down.up = token
+		self.prev
 		del self
 
 class NumberToken(Token):
-	def __init__(self, val: int, up: 'Token' = None, down: 'Token' = None, left: 'Token' = None, right: 'Token' = None):
-		super().__init__(up, down, left, right)
+	def __init__(self, val: int, up: Token = None, down: Token = None, left: Token = None, right: Token = None,
+	             prev: Token = None, next: Token = None):
+		super().__init__(up, down, left, right, prev, next)
 		self.val = val
 	
 	def add_to_end(self, digit: int) -> None:
@@ -95,8 +99,9 @@ class NumberToken(Token):
 		return str(self.val)
 
 class ExactToken(Token):
-	def __init__(self, val: str, up: 'Token' = None, down: 'Token' = None, left: 'Token' = None, right: 'Token' = None):
-		super().__init__(up, down, left, right)
+	def __init__(self, val: str, up: Token = None, down: Token = None, left: Token = None, right: Token = None,
+	             prev: Token = None, next: Token = None):
+		super().__init__(up, down, left, right, prev, next)
 		self.val = val
 	
 	def __str__(self) -> str:
@@ -110,8 +115,9 @@ class ExactToken(Token):
 				return "e"
 
 class OperatorToken(Token):
-	def __init__(self, val: str,  up: 'Token' = None, down: 'Token' = None, left: 'Token' = None, right: 'Token' = None, take_previous: bool = False):
-		super().__init__(up, down, left, right)
+	def __init__(self, val: str, up: Token = None, down: Token = None, left: Token = None, right: Token = None,
+	             prev: Token = None, next: Token = None, take_previous: bool = False):
+		super().__init__(up, down, left, right, prev, next)
 		self.val = val
 		self.take_previous = take_previous
 	
@@ -146,7 +152,8 @@ class OperatorToken(Token):
 				return "oops"
 
 class FractionToken(OperatorToken):
-	def __init__(self, up: 'Token' = None, down: 'Token' = None, left: 'Token' = None, right: 'Token' = None):
+	def __init__(self, val: str, up: Token = None, down: Token = None, left: Token = None, right: Token = None,
+	             prev: Token = None, next: Token = None):
 		if up is None:
 			up = StartToken()
 			up.right = FillableToken()
@@ -159,7 +166,7 @@ class FractionToken(OperatorToken):
 			down.right.right = EndToken()
 			down.up = up
 			down.left = left
-		super().__init__("⁄", up, down, left, right, True)
+		super().__init__("⁄", up, down, left, right, prev, next, True)
 
 root_token: StartToken = StartToken()
 root_token.right = EndToken()
@@ -204,7 +211,9 @@ def solve(exact: bool = True) -> None:
 	pass
 
 def token_to_latex(token: StartToken) -> str:
-
+	latex_str = ""
+	curr = token
+	while isinstance(curr, EndToken):
 
 
 def token_to_latex_sympy() -> str:
