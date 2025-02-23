@@ -4,16 +4,126 @@ from win32api import GetMonitorInfo, MonitorFromPoint
 import tkinter as tk
 from tkinter.font import Font
 from sympy import *
-from io import BytesIO
-from PIL import Image, ImageTk
+import matplotlib
+import matplotlib.pyplot as plt
+
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+matplotlib.use('TkAgg')
 
 init_printing(full_prec=False)
 
 screen_direction = [1, 1]
 
-prev_calculation = ""
-text_calculation = ""
+class TokenArgument:
+	def __init__(self,
+	             up: 'FillableField' = None,
+	             down: 'FillableField' = None,
+	             left: 'FillableField' = None,
+	             right: 'FillableField' = None,
+	             tokens: list['Token'] = None
+	             ):
+		if tokens is None:
+			tokens = [FillableToken()]
+		self.up = up
+		self.down = down
+		self.left = left
+		self.right = right
+		self.tokens: list['Token'] = tokens
+
+class Token:
+	def latex(self) -> str:
+		return "oops"
+
+class FillableToken(Token):
+	def __str__(self):
+		return "⬚"
+	
+	def latex(self) -> str:
+		return "⬚"
+
+class TempToken(Token):
+	def __str__(self):
+		return "⬚"
+	
+	def latex(self) -> str:
+		return ""
+
+class NumberToken(Token):
+	def __init__(self, number: int | str):
+		if isinstance(number, str):
+			number = int(number)
+		self.number = number
+	
+	def add_to_end(self, digit: int) -> None:
+		self.number *= 10
+		self.number += digit
+		
+	def __str__(self) -> str:
+		return str(self.number)
+	
+	def latex(self) -> str:
+		return str(self.number)
+
+class ExactToken(Token):
+	def __init__(self, val: str):
+		self.val = val
+	
+	def __str__(self) -> str:
+		return self.val
+	
+	def latex(self) -> str:
+		match self.val:
+			case "pi":
+				return r"\pi"
+			case "E":
+				return "e"
+
+class OperatorToken(Token):
+	arg: list[TokenArgument] = []
+	
+	def __init__(self, operator: str, take_previous: bool = False, args: list[TokenArgument] | None = None):
+		self.operator = operator
+		self.take_previous = take_previous
+		self.args = args
+	
+	def __str__(self) -> str:
+		match self.operator:
+			case '+':
+				return '+'
+			case '-':
+				return '-'
+			case '*':
+				return "*"
+			case "/":
+				return "*"
+			case "⁄":
+				return f"(({"".join([str(t) for t in self.get_arg(0)])})/({"".join([str(t) for t in self.get_arg(1)])}))"
+			case _:
+				return "oops"
+	
+	def get_arg(self, idx: int) -> list[Token]:
+		if idx >= len(self.args):
+			ValueError("index out of range")
+		return self.args[idx].tokens
+	
+	def latex(self) -> str:
+		match self.operator:
+			case '+':
+				return '+'
+			case '-':
+				return '-'
+			case '*':
+				return r"\times"
+			case "/":
+				return r"\div"
+			case "⁄":
+				return r"\dfrac{"+token_to_latex(self.get_arg(0))+"}{"+token_to_latex(self.get_arg(0))+"}"
+			case _:
+				return "oops"
+
+calculation_tokens: list[Token] = []
 tags_calculation: list[tuple[str, int, int]] = []
+cursor_pos: tuple[int, int] = (0, 0)
 Ans = symbols("Ans")
 
 dvd_logo_toggle = False
@@ -51,207 +161,70 @@ def get_taskbar_height() -> int:
 
 taskbar_height = get_taskbar_height()
 
-def tokenise(string: str) -> list[str]:
-	prev_type: str = ""
-	curr: str = ""
-	tokens: list[str] = []
-	for char in string:
-		curr_type: str
-		if char.isdigit() or char == ".":
-			curr_type = "num"
-		elif char.isalpha():
-			curr_type = "alpha"
-		else:
-			curr_type = "symbol"
-		if curr_type == prev_type:
-			curr += char
-		elif prev_type != "":
-			tokens.append(curr)
-			curr = char
-		else:
-			tokens.append(char)
-		prev_type = curr_type
-	tokens.append(curr)
-	return tokens
-
 def solve(exact: bool = True) -> None:
-	global prev_calculation
-	global text_calculation
+	pass
+
+def token_to_latex(tokens: list[Token] | None = None) -> str:
+	if tokens is None:
+		global calculation_tokens
+		tokens = calculation_tokens
+	return " ".join([t.latex() for t in tokens])
+
+def token_to_latex_sympy() -> str:
+	global calculation_tokens
+	str_tokens: str = "".join([str(token) for token in calculation_tokens])
+	transformations = parsing.sympy_parser.standard_transformations + (parsing.sympy_parser.implicit_multiplication, )
+	expr = parse_expr(str_tokens, evaluate=False, transformations=transformations)
+	return latex(expr, mul_symbol="times")
+
+def add_to_calc(token: Token) -> None:
+	global calculation_tokens
 	global cursor_pos
-	parsed: list[str] = []
-	expression_type: str = "equation"
-	has_ans: bool = False
+	prefix: Token | None = None
+	suffix: Token | None = None
 	
-	# Add in brackets that are not closed
-	brackets, left, right = get_brackets(text_calculation)
-	if left > 0:
-		text_calculation += "".join([")" for _i in range(left)])
-	if right > 0:
-		text_calculation = "".join(["(" for _i in range(right)]) + text_calculation
 	
-	for token in tokenise(text_calculation):
-		match token:
-			case "):=":
-				expression_type = "define"
-				token = ")="
-			case "Ans":
-				has_ans = True
-			case token if token.isalpha():
-				symbols_mem[token] = symbols(token)
-		parsed.append(token)
+	if isinstance(token, NumberToken):
+		if len(calculation_tokens) != 0 and calculation_tokens[len(calculation_tokens) - 1]:
+			prev: Token = calculation_tokens[cursor_pos[0]]
+			if isinstance(prev, TempToken):
+				calculation_tokens.pop(len(calculation_tokens) - 1)
+			elif isinstance(prev, NumberToken):
+				token.number += calculation_tokens.pop(cursor_pos[0]).number * 10
+			elif isinstance(prev, OperatorToken) and len(prev.args) != 0:
+				if cursor_pos[1] >= len(prev.args):
+					cursor_pos = cursor_pos[0] + 1, 0
+				else:
+					prev.args[cursor_pos[1]].tokens.append(token)
+					token = calculation_tokens.pop(cursor_pos[0])
+			else:
+				cursor_pos = cursor_pos[0] + 1, 0
+		else:
+			cursor_pos = cursor_pos[0] + 1, 0
+	elif isinstance(token, OperatorToken): # if val is symbol
+		if token.take_previous and len(calculation_tokens) != 0:
+			token.args[0].tokens = [calculation_tokens.pop(cursor_pos[0])]
+			cursor_pos = cursor_pos[0], 1
+		else:
+			suffix = TempToken()
+			cursor_pos = cursor_pos[0] + 1, 0
 	
-	match expression_type:
-		case "equation":
-			symbol_equation = sympify(text_calculation)
-			
-			if has_ans:
-				symbol_equation = sympify(symbol_equation).subs(Ans, prev_calculation)
-			for fn_name, fn_symbolic in relations_mem.items():
-				symbol_equation = sympify(symbol_equation).subs(fn_name, fn_symbolic)
-			
-			prev_calculation = symbol_equation
-			obj = BytesIO()
-			preview(symbol_equation, viewer='BytesIO', output='png', outputbuffer=obj, dvioptions=["-bd", "0", "-fg", f"RGB {hex_to_rgb(Text)}", "-bg", f"RGB {hex_to_rgb(Base)}", "-D", "180"])
-			obj.seek(0)
-			text_area[1].img = ImageTk.PhotoImage(Image.open(obj))
-			text_area[1].config(image=text_area[1].img)
-			
-			if not exact:
-				symbol_equation = symbol_equation.evalf().simplify().normal()
-			
-			text_calculation = str(symbol_equation)
-			cursor_pos = len(text_calculation)
-			update_text_calculation()
-		case "define":
-			idx: int = 0
-			name: str = ""
-			fn_args: list[str] = []
-			while parsed[idx] != "(":
-				name += parsed[idx]
-				idx += 1
-			
-			while parsed[idx] != ")=" or parsed[idx] == ",)=":
-				if parsed[idx].strip() != ",":
-					fn_args.append(parsed[idx])
-					symbols_mem[parsed[idx]] = symbols(parsed[idx])
-				idx += 1
-			idx += 1
-			
-			relations_mem[name] = sympify("".join(parsed[idx:]))
-			text_calculation = ""
-			cursor_pos = 0
-			update_text_calculation("Done", italic=(0, 4), cursor=0)
-
-cursor_pos: int = 0
-
-def add_to_calc(val: str | int, tags: list[str] | str | None = None) -> None:
-	if tags is None:
-		tags = []
-	elif isinstance(tags, str):
-		tags = [tags]
-	global text_calculation
-	global cursor_pos
-	prefix: str = ""
-	suffix: str = ""
-	val = str(val)
+	if suffix is not None:
+		calculation_tokens.insert(cursor_pos[0], suffix)
+	if token is not None:
+		calculation_tokens.insert(cursor_pos[0], token)
+	if prefix is not None:
+		calculation_tokens.insert(cursor_pos[0], prefix)
 	
-	if len(val) != 0:
-		if len(text_calculation) - 1 >= cursor_pos + 1 >= 0:
-			next_char: str = text_calculation[cursor_pos + 1]
-			last_char: str = val[len(val) - 1]
-			if (next_char == "(" and val.isalnum()) or (next_char.isalpha() and val.isdigit()) or (next_char.isdigit() and last_char.isalpha()):
-				suffix = "*"
-		if len(text_calculation) - 1 >= cursor_pos - 1 >= 0:
-			prev_char: str = text_calculation[cursor_pos - 1]
-			first_char: str = val[0]
-			if (prev_char == ")" and val.isalnum()) or (prev_char.isalpha() and val.isdigit()) or (prev_char.isdigit() and first_char.isalpha()):
-				prefix = "*"
-	
-	text_calculation = text_calculation[:cursor_pos] + prefix + val + suffix + text_calculation[cursor_pos:]
-	new_cursor_pos = cursor_pos + len(prefix) + len(val) + len(suffix)
-	for tag in tags:
-		tags_calculation.append((tag, cursor_pos, new_cursor_pos))
-	update_text_calculation()
-	cursor_pos = new_cursor_pos
-	text_area[0].mark_set("insert", f"1.{cursor_pos}")
-	
-
-def update_text_calculation(calc: str | None = None, *, italic: list[tuple[int, int]] | tuple[int, int] | None = None, cursor: int | None = None) -> None:
-	global text_calculation
-	text_area[0].delete(1.0, tk.END)
-	text_area[0].insert(1.0, beautify_str(str(calc if calc is not None else text_calculation)))
-	if italic is not None:
-		if isinstance(italic, tuple):
-			italic = [italic]
-		for ran in italic:
-			text_area[0].tag_add("italic", f"1.{ran[0]}", f"1.{ran[1]}")
-	brackets, left, right = get_brackets(text_calculation)
-	for bracket in brackets:
-		text_area[0].tag_add(rainbow[bracket[1]], f"1.{bracket[0]}", f"1.{bracket[0] + 1}")
-	if left > 0:
-		text_area[0].insert("1.end", "".join([")" for _i in range(left)]))
-		text_area[0].tag_add(Overlay1, f"1.end-{left}c", "1.end")
-	if right > 0:
-		text_area[0].insert("1.0", "".join(["(" for _i in range(right)]))
-		text_area[0].tag_add(Overlay1, f"1.0", f"1.{right}")
-	if cursor is not None:
-		global cursor_pos
-		cursor_pos = cursor
-	if calc is None:
-		for tag in tags_calculation:
-			text_area[0].tag_add(tag[0], f"1.{tag[1]}", f"1.{tag[2]}")
+	latex_string = token_to_latex()
+	text_area.display_latex(latex_string)
+	print("".join([str(t) for t in calculation_tokens]), ":", latex_string)
 
 def backspace_calc(calc: str | None = None) -> None:
-	global text_calculation
-	global cursor_pos
-	if cursor_pos >= 1:
-		text_calculation = text_calculation[:cursor_pos - 1] + text_calculation[cursor_pos:]
-		cursor_pos -= 1
-		text_area[0].mark_set("insert", f"1.{cursor_pos}")
-		update_text_calculation()
+	pass
 
 def clear_calc() -> None:
-	global text_calculation
-	global cursor_pos
-	text_calculation = ""
-	text_area[0].delete(1.0, tk.END)
-	cursor_pos = 0
-
-def beautify_str(string: str) -> str:
-	new_string: str = ""
-	i: int = 0
-	while i <= len(string) - 1:
-		added: bool = False
-		for j in range(max_repl, 0, -1):
-			if i+j <= len(string) and string[i:i+j] in repl:
-				new_string += repl[string[i:i+j]]
-				i += j - 1
-				added = True
-				break
-		if not added:
-			new_string += string[i]
-		i += 1
-	return new_string
-
-def get_brackets(string: str) -> tuple[list[tuple[int, int]], int, int]:
-	brackets: int = 0
-	unclosed_left_brackets: int = 0
-	unclosed_right_brackets: int = 0
-	brackets_list: list[tuple[int, int]] = []
-	for i, char in enumerate(string):
-		if char == "(":
-			brackets_list.append((i, unclosed_left_brackets))
-			brackets += 1
-			unclosed_left_brackets += 1
-		elif char == ")":
-			brackets -= 1
-			if unclosed_left_brackets > 0:
-				unclosed_left_brackets -= 1
-				brackets_list.append((i, unclosed_left_brackets))
-			else:
-				unclosed_right_brackets += 1
-				brackets_list.append((i, -unclosed_right_brackets))
-	return brackets_list, unclosed_left_brackets, unclosed_right_brackets
+	pass
 
 repl = {
 	"/": "÷",
@@ -267,10 +240,10 @@ class ButtonConfig:
 	pass
 
 class AddButtonConfig(ButtonConfig):
-	def __init__(self, text: str, add_val: str | None = None, tags: list[str] | str = None) -> None:
+	def __init__(self, text: str, token: Token, **kwargs) -> None:
 		self.text = text
-		self.add_val = add_val if add_val is not None else text
-		self.tags = tags
+		self.token = token
+		self.kwargs = kwargs
 
 class FunctionButtonConfig(ButtonConfig):
 	def __init__(self, text: str, func: callable) -> None:
@@ -314,6 +287,7 @@ root.minsize(66*columns, 41*3+64*rows)
 root.configure(bg=Base)
 
 font = Font(family="Calibri", size=22)
+small_font = Font(family="Calibri", size=10)
 italic_font = Font(family="Calibri", size=22, slant="italic")
 
 screen_size = (root.winfo_screenwidth(), root.winfo_screenheight())
@@ -338,10 +312,23 @@ def move_window():
 class TextArea(tk.Frame):
 	def __init__(self, master = None, **kwargs):
 		super().__init__(master, **kwargs)
+		self.figure = matplotlib.figure.Figure(figsize=(5, 4), dpi=100)
+		self.figure.patch.set_facecolor(Base)
+		self.latex_input = self.figure.add_subplot(111)
+		self.latex_input.patch.set_facecolor(Base)
+		for dir in ["top", "bottom", "left", "right"]:
+			self.latex_input.spines[dir].set_color(Base)
 		self.lines: list[tk.Text | tk.Label] = [
 			tk.Text(self, height=1, width=16, font=font, bg=Base, fg=Text, highlightthickness=0, borderwidth=0, insertbackground=Text, insertborderwidth=0, insertwidth=4),
 			tk.Label(self, height=3, width=16, bg=Base, fg=Text, highlightthickness=0, borderwidth=0)
 		]
+		self.canvas = FigureCanvasTkAgg(self.figure, master=self.lines[1])
+		self.canvas._tkcanvas.configure(background=Base)
+		self.canvas._tkcanvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+		
+		self.latex_input.get_xaxis().set_visible(False)
+		self.latex_input.get_yaxis().set_visible(False)
+		
 		self.lines[0].grid(column=0, row=0, sticky=tk.EW)
 		self.lines[1].grid(column=0, row=1, sticky=tk.NSEW)
 		
@@ -359,6 +346,12 @@ class TextArea(tk.Frame):
 	
 	def __getitem__(self, item):
 		return self.lines[item]
+	
+	def display_latex(self, latex_str: str) -> None:
+		self.latex_input.clear()
+		self.latex_input.text(0.2, 0.6, "$"+latex_str+"$", fontsize=24, color=Text, backgroundcolor=Base)
+		self.latex_input.patch.set_facecolor(Base)
+		self.canvas.draw()
 
 text_area = TextArea(root, bg=Base)
 text_area.grid(column=0, row=0, sticky=tk.NSEW)
@@ -378,44 +371,52 @@ def switch_to_window(window) -> None:
 	window.grid()
 	curr_window = window
 
+temp_arg: TokenArgument = TokenArgument()
+fraction_args: list[TokenArgument] = [temp_arg]
+temp_arg = TokenArgument(fraction_args[0])
+fraction_args.append(temp_arg)
+fraction_args[0].down = temp_arg
+
 ui: dict[tk.Frame, list[tuple[int, int, ButtonConfig]]] = {
 	main_button_area: [
-		(0, 0, AddButtonConfig("+")),
-		(0, 1, AddButtonConfig("-")),
-		(0, 2, AddButtonConfig("÷", "/")),
-		(0, 3, AddButtonConfig("×", "*")),
-		(0, 4, AddButtonConfig("(")),
-		(0, 5, AddButtonConfig(")")),
-		(0, 6, AddButtonConfig("7")),
-		(0, 7, AddButtonConfig("8")),
-		(0, 8, AddButtonConfig("9")),
+		(0, 0, AddButtonConfig("+", OperatorToken("+"))),
+		(0, 1, AddButtonConfig("-", OperatorToken("+"))),
+		(0, 2, AddButtonConfig("÷", OperatorToken("/"))),
+		(0, 3, AddButtonConfig("×", OperatorToken("*"))),
+		(0, 4, AddButtonConfig("⬚\n—\n⬚", OperatorToken("⁄", True, fraction_args), font=small_font)),
+		# (0, 5, AddButtonConfig(")")),
+		(0, 6, AddButtonConfig("7", NumberToken("7"))),
+		(0, 7, AddButtonConfig("8", NumberToken("8"))),
+		(0, 8, AddButtonConfig("9", NumberToken("9"))),
 		(1, 0, AddButtonConfig("⬚ⁿ", "**(")),
 		(1, 1, AddButtonConfig("⬚²", "**2")),
 		(1, 2, AddButtonConfig("²√⬚", "Sqrt(")),
 		(1, 3, AddButtonConfig("ⁿ√⬚", "**(1/")),
-		(1, 6, AddButtonConfig("4")),
-		(1, 7, AddButtonConfig("5")),
-		(1, 8, AddButtonConfig("6")),
+		(1, 4, AddButtonConfig("(", OperatorToken("("))),
+		(1, 5, AddButtonConfig(")", OperatorToken(")"))),
+		(1, 6, AddButtonConfig("4", NumberToken("4"))),
+		(1, 7, AddButtonConfig("5", NumberToken("5"))),
+		(1, 8, AddButtonConfig("6", NumberToken("6"))),
 		
 		
-		(2, 6, AddButtonConfig("1")),
-		(2, 7, AddButtonConfig("2")),
-		(2, 8, AddButtonConfig("3")),
+		(2, 6, AddButtonConfig("1", NumberToken("1"))),
+		(2, 7, AddButtonConfig("2", NumberToken("2"))),
+		(2, 8, AddButtonConfig("3", NumberToken("3"))),
 		
 		
-		(3, 0, AddButtonConfig("π")),
-		(3, 1, AddButtonConfig("e", "E", "italic")),
+		(3, 0, AddButtonConfig("π", ExactToken("pi"))),
+		(3, 1, AddButtonConfig("e", ExactToken("E"))),
 		
 		(3, 6, FunctionButtonConfig("=", solve)),
-		(3, 7, AddButtonConfig("0")),
-		(3, 8, AddButtonConfig("Ans", tags="italic")),
+		(3, 7, AddButtonConfig("0", NumberToken("0"))),
+		(3, 8, AddButtonConfig("Ans", ExactToken("Ans"))),
 		
 		
 		(4, 6, FunctionButtonConfig("≈", lambda: solve(False))),
 		(4, 7, FunctionButtonConfig("⌫", backspace_calc)),
 		(4, 8, FunctionButtonConfig("C", clear_calc)),
 		
-		(4, 2, AddButtonConfig(":=")),
+		(4, 2, AddButtonConfig(":=", OperatorToken(":="))),
 		
 		(0, 9, FunctionButtonConfig("🖩", lambda: switch_to_window(main_button_area))),
 		(1, 9, FunctionButtonConfig("trig", lambda: switch_to_window(function_button_area))),
@@ -461,7 +462,9 @@ ui: dict[tk.Frame, list[tuple[int, int, ButtonConfig]]] = {
 
 class HoverButton(tk.Button):
 	def __init__(self, master, **kwargs):
-		tk.Button.__init__(self,master=master, font=font,width=4, bg=Surface0, activeforeground=Mantle, borderwidth=0, **kwargs)
+		if "font" not in kwargs:
+			kwargs["font"] = font
+		tk.Button.__init__(self,master=master, width=4, bg=Surface0, activeforeground=Mantle, borderwidth=0, **kwargs)
 		self.bind("<Enter>", self.on_enter)
 		self.bind("<Leave>", self.on_leave)
 	
@@ -475,10 +478,10 @@ for frame, ui_elements in ui.items():
 	for i, (row, column, cfg) in enumerate(ui_elements):
 		if isinstance(cfg, AddButtonConfig):
 			fancy: str = cfg.text
-			plain: str = cfg.add_val
-			tags: list = cfg.tags
-			btn = HoverButton(frame, text=fancy, command=lambda plain=plain: add_to_calc(plain, tags))
-			btn.grid(row=row, column=column)
+			token: Token = cfg.token
+			kwargs = cfg.kwargs
+			btn = HoverButton(frame, text=fancy, command=lambda token=token: add_to_calc(token), **kwargs)
+			btn.grid(row=row, column=column, sticky=tk.NSEW)
 			btns.append(btn)
 		elif isinstance(cfg, FunctionButtonConfig):
 			fn_name: str = cfg.text
