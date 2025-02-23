@@ -91,7 +91,7 @@ class OperatorToken(Token):
 				return "oops"
 
 calculation_tokens: Token = Token([[]])
-cursor_pos: list[tuple[int, int]] = [(0,0)]
+cursor_pos: list[tuple[int, int]] = [(0,-1)]
 Ans = symbols("Ans")
 
 dvd_logo_toggle = False
