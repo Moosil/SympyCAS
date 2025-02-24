@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter.font import Font
 from sympy import *
 import matplotlib
+from typing import Union, Type
 import matplotlib.pyplot as plt
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -15,8 +16,10 @@ init_printing(full_prec=False)
 screen_direction = [1, 1]
 
 class Token:
-	def __init__(self, children: list[list['Token']] = None) -> None:
-		self.children = children
+	def __init__(self, parent: 'ContainerToken', prev: 'Token' = None, next: 'Token' = None) -> None:
+		self.prev = prev
+		self.next = next
+		self.parent = parent
 	
 	def __str__(self):
 		return "oops"
@@ -24,9 +27,23 @@ class Token:
 	def latex(self) -> str:
 		return "oops"
 
+class ContainerToken(Token):
+	def __init__(self, parent: 'ContainerToken' = None, children: list[Token] = None) -> None:
+		super().__init__(parent, None, None)
+		if children is None:
+			children = []
+		self.children = children
+	
+	def __str__(self) -> str:
+		return "⬚" if len(self.children) == 0 else " ".join([str(c) for c in self.children])
+	
+	def latex(self) -> str:
+		return "⬚" if len(self.children) == 0 else " ".join([c.latex() for c in self.children])
+		
+
 class NumberToken(Token):
-	def __init__(self, val: int, children: list[list[Token]] = None):
-		super().__init__(children)
+	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None, val: int = 0) -> None:
+		super().__init__(parent, prev, next)
 		self.val = val
 	
 	def add_to_end(self, digit: int) -> None:
@@ -40,8 +57,8 @@ class NumberToken(Token):
 		return str(self.val)
 
 class ExactToken(Token):
-	def __init__(self, val: str, children: list[list[Token]] = None):
-		super().__init__(children)
+	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None, val: str = "this needs to be filled") -> None:
+		super().__init__(parent, prev, next)
 		self.val = val
 	
 	def __str__(self) -> str:
@@ -55,10 +72,9 @@ class ExactToken(Token):
 				return "e"
 
 class OperatorToken(Token):
-	def __init__(self, val: str, take_previous: bool = False, children: list[list[Token]] = None):
-		super().__init__(children)
+	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None, val: str = "this needs to be filled") -> None:
+		super().__init__(parent, prev, next)
 		self.val = val
-		self.take_previous = take_previous
 	
 	def __str__(self) -> str:
 		match self.val:
@@ -70,8 +86,6 @@ class OperatorToken(Token):
 				return "*"
 			case "/":
 				return "*"
-			case "⁄":
-				return f"( ({"".join([str(t) for t in self.children])}) / ({"".join([str(t) for t in self.children])}) )"
 			case _:
 				return "oops"
 	
@@ -85,13 +99,68 @@ class OperatorToken(Token):
 				return r"\times"
 			case "/":
 				return r"\div"
-			case "⁄":
-				return r"\dfrac{"+token_to_latex(self.children)+"}{"+token_to_latex(self.children)+"}"
 			case _:
 				return "oops"
 
-calculation_tokens: Token = Token([[]])
-cursor_pos: list[tuple[int, int]] = [(0,-1)]
+class FractionToken(OperatorToken):
+	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None, top_children: list[Token] = None,
+	             bottom_children: list[Token] = None) -> None:
+		super().__init__(parent, prev, next, "⁄")
+		if top_children is None:
+			top_children = []
+		if bottom_children is None:
+			bottom_children = []
+		self.top: ContainerToken = ContainerToken(parent, top_children)
+		self.bottom: ContainerToken = ContainerToken(parent, bottom_children)
+	
+	def __str__(self) -> str:
+		return f"({str(self.top)}) / ({str(self.bottom)})"
+	def latex(self) -> str:
+		return r"\dfrac{"+self.top.latex()+"}{"+self.bottom.latex()+"}"
+
+class SubSuperScript(Token):
+	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None, inner_children: list[Token] = None, sub_children: list[Token] = None,
+	             super_children: list[Token] = None) -> None:
+		super().__init__(parent, prev, next)
+		if inner_children is None:
+			inner_children = []
+		if sub_children is None:
+			sub_children = []
+		if super_children is None:
+			super_children = []
+		self.inner: ContainerToken = ContainerToken(parent, inner_children)
+		self.sub: ContainerToken = ContainerToken(parent, sub_children)
+		self.super: ContainerToken = ContainerToken(parent, super_children)
+		for child in self.inner.children:
+			child.parent = self.inner
+		for child in self.sub.children:
+			child.parent = self.sub
+		for child in self.super.children:
+			child.parent = self.super
+	
+	def __str__(self) -> str:
+		return f"({self.inner})_{{{self.sub}}}^{{{self.super}}}"
+	
+	def latex(self) -> str:
+		return f"{self.inner.latex()}_{{{self.sub.latex()}}}^{{{self.super.latex()}}}"
+
+class PowerToken(SubSuperScript, OperatorToken):
+	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None,
+	             inner_children: list[Token] = None, power_children: list[Token] = None) -> None:
+		super().__init__(parent=parent, prev=prev, next=next, inner_children=inner_children, sub_children=None, super_children=power_children)
+		del self.val
+	
+	def __str__(self) -> str:
+		return f"({self.inner})**({self.super})"
+	
+	def latex(self) -> str:
+		return f"{self.inner.latex()}^{{{self.super.latex()}}}"
+
+
+calculation: ContainerToken = ContainerToken()
+curr_token: ContainerToken = calculation
+cursor_pos: int = -1
+
 Ans = symbols("Ans")
 
 dvd_logo_toggle = False
@@ -130,32 +199,88 @@ taskbar_height = get_taskbar_height()
 def solve(exact: bool = True) -> None:
 	pass
 
-def token_to_latex(tokens: list[Token]) -> str:
-	return " ".join([t.latex() for t in tokens])
+# def token_to_latex_sympy() -> str:
+# 	str_tokens: str = "".join([str(token) for token in calculation_tokens])
+# 	transformations = parsing.sympy_parser.standard_transformations + (parsing.sympy_parser.implicit_multiplication, )
+# 	expr = parse_expr(str_tokens, evaluate=False, transformations=transformations)
+# 	return latex(expr, mul_symbol="times")
 
-def token_to_latex_sympy() -> str:
-	str_tokens: str = "".join([str(token) for token in calculation_tokens])
-	transformations = parsing.sympy_parser.standard_transformations + (parsing.sympy_parser.implicit_multiplication, )
-	expr = parse_expr(str_tokens, evaluate=False, transformations=transformations)
-	return latex(expr, mul_symbol="times")
-
-def add_to_calc(token: Token) -> None:
+def add_to_calc(token_type: Type[Token], *token_args) -> None:
+	global calculation
 	global cursor_pos
+	global curr_token
+	if cursor_pos == -1:
+		token: Token = token_type(curr_token, None, None, *token_args)
+		curr_token.children.append(token)
+		if isinstance(token, FractionToken):
+			curr_token = token.top
+			cursor_pos = -1
+		else:
+			cursor_pos = 0
+	else:
+		prev_token = curr_token.children[cursor_pos]
+		next_token = None if cursor_pos + 1 >= len(curr_token.children) else curr_token.children[cursor_pos+1]
+		token: Token = token_type(curr_token, prev_token, next_token, *token_args)
+		if isinstance(token, NumberToken):
+			if isinstance(prev_token, NumberToken):
+				prev_token.val *= 10
+				prev_token.val += token.val
+			elif isinstance(prev_token, OperatorToken):
+				cursor_pos += 1
+				prev_token.next = token
+				if next_token is not None:
+					next_token.prev = token
+				curr_token.children.insert(cursor_pos, token)
+		elif isinstance(token, OperatorToken):
+			if isinstance(token, FractionToken):
+				if isinstance(prev_token, NumberToken | PowerToken):
+					token.top.children.append(prev_token)
+					token.prev = prev_token.prev
+					prev_token.prev = None
+					prev_token.next = None
+					prev_token.parent = token.top
+					curr_token.children.pop(cursor_pos)
+					curr_token.children.insert(cursor_pos, token)
+					if next_token is not None:
+						next_token.prev = token
+					curr_token = token.bottom
+				else:
+					prev_token.next = token
+					if next_token is not None:
+						next_token.prev = token
+					curr_token = token.top
+				cursor_pos = -1
+			elif isinstance(token, PowerToken):
+				if isinstance(prev_token, NumberToken):
+					token.inner.children.append(prev_token)
+					token.prev = prev_token.prev
+					prev_token.prev = None
+					prev_token.next = None
+					prev_token.parent = token.inner
+					curr_token.children.pop(cursor_pos)
+					curr_token.children.insert(cursor_pos, token)
+					if next_token is not None:
+						next_token.prev = token
+					if len(token.super.children) == 0:
+						curr_token = token.super
+						cursor_pos = -1
+					else:
+						pass
+				else:
+					prev_token.next = token
+					if next_token is not None:
+						next_token.prev = token
+					curr_token = token.inner
+					cursor_pos = -1
+			else:
+				cursor_pos += 1
+				prev_token.next = token
+				if next_token is not None:
+					next_token.prev = token
+				curr_token.children.insert(cursor_pos, token)
+		
 	
-	cursor_token: Token = calculation_tokens
-	for pos in cursor_pos:
-		cursor_token = cursor_token.children[pos[0]][pos[1]]
-	
-	if isinstance(token, NumberToken): # If token to add is a Number Token
-		if isinstance(cursor_token, NumberToken): # If previous token is Number Token, add onto it
-			cursor_token.val *= 10
-			cursor_token.val += token.val
-		elif isinstance(cursor_token, OperatorToken): # If previous token is Operator Token,
-			pass
-	elif isinstance(token, OperatorToken): # if val is an Operator Token
-		pass
-	
-	latex_string = token_to_latex()
+	latex_string = calculation.latex()
 	text_area.display_latex(latex_string)
 
 def backspace_calc() -> None:
@@ -178,9 +303,10 @@ class ButtonConfig:
 	pass
 
 class AddButtonConfig(ButtonConfig):
-	def __init__(self, text: str, token: Token, **kwargs) -> None:
+	def __init__(self, text: str, token_type: Type[Token], *token_args, **kwargs) -> None:
 		self.text = text
-		self.token = token
+		self.token_type = token_type
+		self.token_args = token_args
 		self.kwargs = kwargs
 
 class FunctionButtonConfig(ButtonConfig):
@@ -311,38 +437,38 @@ def switch_to_window(window) -> None:
 
 ui: dict[tk.Frame, list[tuple[int, int, ButtonConfig]]] = {
 	main_button_area: [
-		(0, 0, AddButtonConfig("+", OperatorToken("+"))),
-		(0, 1, AddButtonConfig("-", OperatorToken("+"))),
-		(0, 2, AddButtonConfig("÷", OperatorToken("/"))),
-		(0, 3, AddButtonConfig("×", OperatorToken("*"))),
-		(0, 4, AddButtonConfig("⬚\n—\n⬚", OperatorToken("⁄", take_previous=True), font=small_font)),
+		(0, 0, AddButtonConfig("+", OperatorToken, "+")),
+		(0, 1, AddButtonConfig("-", OperatorToken, "+")),
+		(0, 2, AddButtonConfig("÷", OperatorToken, "/")),
+		(0, 3, AddButtonConfig("×", OperatorToken, "*")),
+		(0, 4, AddButtonConfig("⬚\n—\n⬚", FractionToken, font=small_font)),
 		# (0, 5, AddButtonConfig(")")),
-		(0, 6, AddButtonConfig("7", NumberToken(7))),
-		(0, 7, AddButtonConfig("8", NumberToken(8))),
-		(0, 8, AddButtonConfig("9", NumberToken(9))),
-		(1, 0, AddButtonConfig("⬚ⁿ", "**(")),
-		(1, 1, AddButtonConfig("⬚²", "**2")),
+		(0, 6, AddButtonConfig("7", NumberToken, 7)),
+		(0, 7, AddButtonConfig("8", NumberToken, 8)),
+		(0, 8, AddButtonConfig("9", NumberToken, 9)),
+		(1, 0, AddButtonConfig("⬚ⁿ", PowerToken)),
+		(1, 1, AddButtonConfig("⬚²", PowerToken, None, [NumberToken(None, val=2)])),
 		(1, 2, AddButtonConfig("²√⬚", "Sqrt(")),
 		(1, 3, AddButtonConfig("ⁿ√⬚", "**(1/")),
-		(1, 4, AddButtonConfig("(", OperatorToken("("))),
-		(1, 5, AddButtonConfig(")", OperatorToken(")"))),
-		(1, 6, AddButtonConfig("4", NumberToken(4))),
-		(1, 7, AddButtonConfig("5", NumberToken(5))),
-		(1, 8, AddButtonConfig("6", NumberToken(6))),
+		(1, 4, AddButtonConfig("(", OperatorToken, "(")),
+		(1, 5, AddButtonConfig(")", OperatorToken, ")")),
+		(1, 6, AddButtonConfig("4", NumberToken, 4)),
+		(1, 7, AddButtonConfig("5", NumberToken, 5)),
+		(1, 8, AddButtonConfig("6", NumberToken, 6)),
 		
 		
-		(2, 6, AddButtonConfig("1", NumberToken(1))),
-		(2, 7, AddButtonConfig("2", NumberToken(2))),
-		(2, 8, AddButtonConfig("3", NumberToken(3))),
+		(2, 6, AddButtonConfig("1", NumberToken, 1)),
+		(2, 7, AddButtonConfig("2", NumberToken, 2)),
+		(2, 8, AddButtonConfig("3", NumberToken, 3)),
 		
 		
-		# (3, 0, AddButtonConfig("π", ExactToken("pi"))),
-		# (3, 1, AddButtonConfig("e", ExactToken("E"))),
+		# (3, 0, AddButtonConfig("π", ExactToken, "pi")),
+		# (3, 1, AddButtonConfig("e", ExactToken, "E")),
 		(3, 1, FunctionButtonConfig("↑", None)),
 		
 		(3, 6, FunctionButtonConfig("=", solve)),
-		(3, 7, AddButtonConfig("0", NumberToken(0))),
-		(3, 8, AddButtonConfig("Ans", ExactToken("Ans"))),
+		(3, 7, AddButtonConfig("0", NumberToken, 0)),
+		(3, 8, AddButtonConfig("Ans", ExactToken, "Ans")),
 		
 		(4, 0, FunctionButtonConfig("←", None)),
 		(4, 1, FunctionButtonConfig("↓", None)),
@@ -351,7 +477,7 @@ ui: dict[tk.Frame, list[tuple[int, int, ButtonConfig]]] = {
 		(4, 7, FunctionButtonConfig("⌫", backspace_calc)),
 		(4, 8, FunctionButtonConfig("C", clear_calc)),
 		
-		(4, 3, AddButtonConfig(":=", OperatorToken(":="))),
+		(4, 3, AddButtonConfig(":=", OperatorToken, ":=")),
 		
 		(0, 9, FunctionButtonConfig("🖩", lambda: switch_to_window(main_button_area))),
 		(1, 9, FunctionButtonConfig("trig", lambda: switch_to_window(function_button_area))),
@@ -413,9 +539,10 @@ for frame, ui_elements in ui.items():
 	for i, (row, column, cfg) in enumerate(ui_elements):
 		if isinstance(cfg, AddButtonConfig):
 			fancy: str = cfg.text
-			token: Token = cfg.token
+			token_type: Type[Token] = cfg.token_type
+			token_args = cfg.token_args
 			kwargs = cfg.kwargs
-			btn = HoverButton(frame, text=fancy, command=lambda token=token: add_to_calc(token), **kwargs)
+			btn = HoverButton(frame, text=fancy, command=lambda token_type=token_type, token_args=token_args: add_to_calc(token_type, *token_args), **kwargs)
 			btn.grid(row=row, column=column, sticky=tk.NSEW)
 			btns.append(btn)
 		elif isinstance(cfg, FunctionButtonConfig):
