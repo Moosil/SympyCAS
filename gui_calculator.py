@@ -28,17 +28,28 @@ class Token:
 		return "oops"
 
 class ContainerToken(Token):
-	def __init__(self, parent: 'ContainerToken' = None, children: list[Token] = None) -> None:
+	def __init__(self, parent: 'ContainerToken' = None, children: list[Token] = None, token_type: Type['Token'] = None) -> None:
 		super().__init__(parent, None, None)
 		if children is None:
 			children = []
 		self.children = children
+		self.token_type = token_type
 	
 	def __str__(self) -> str:
-		return "⬚" if len(self.children) == 0 else " ".join([str(c) for c in self.children])
+		if len(self.children) == 0:
+			return "⬚"
+		elif len(self.children) == 1:
+			return str(self.children[0])
+		else:
+			return "("+" ".join([str(c) for c in self.children])+")"
 	
 	def latex(self) -> str:
-		return "⬚" if len(self.children) == 0 else " ".join([c.latex() for c in self.children])
+		if len(self.children) == 0:
+			return "⬚"
+		elif len(self.children) == 1:
+			return self.children[0].latex()
+		else:
+			return "("+" ".join([c.latex() for c in self.children])+")"
 		
 
 class NumberToken(Token):
@@ -110,13 +121,16 @@ class FractionToken(OperatorToken):
 			top_children = []
 		if bottom_children is None:
 			bottom_children = []
-		self.top: ContainerToken = ContainerToken(parent, top_children)
-		self.bottom: ContainerToken = ContainerToken(parent, bottom_children)
+		self.top: ContainerToken = ContainerToken(parent, top_children, FractionToken)
+		self.bottom: ContainerToken = ContainerToken(parent, bottom_children, FractionToken)
 	
 	def __str__(self) -> str:
 		return f"({str(self.top)}) / ({str(self.bottom)})"
 	def latex(self) -> str:
-		return r"\dfrac{"+self.top.latex()+"}{"+self.bottom.latex()+"}"
+		if self.parent.token_type is SubSuperScript or self.parent.token_type is PowerToken:
+			return self.top.latex()+" / "+self.bottom.latex()
+		else:
+			return r"\dfrac{"+self.top.latex()+"}{"+self.bottom.latex()+"}"
 
 class SubSuperScript(Token):
 	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None, inner_children: list[Token] = None, sub_children: list[Token] = None,
@@ -128,9 +142,9 @@ class SubSuperScript(Token):
 			sub_children = []
 		if super_children is None:
 			super_children = []
-		self.inner: ContainerToken = ContainerToken(parent, inner_children)
-		self.sub: ContainerToken = ContainerToken(parent, sub_children)
-		self.super: ContainerToken = ContainerToken(parent, super_children)
+		self.inner: ContainerToken = ContainerToken(parent, inner_children, SubSuperScript)
+		self.sub: ContainerToken = ContainerToken(parent, sub_children, SubSuperScript)
+		self.super: ContainerToken = ContainerToken(parent, super_children, SubSuperScript)
 		for child in self.inner.children:
 			child.parent = self.inner
 		for child in self.sub.children:
@@ -149,6 +163,8 @@ class PowerToken(SubSuperScript, OperatorToken):
 	             inner_children: list[Token] = None, power_children: list[Token] = None) -> None:
 		super().__init__(parent=parent, prev=prev, next=next, inner_children=inner_children, sub_children=None, super_children=power_children)
 		del self.val
+		del self.sub
+		self.super.token_type = PowerToken
 	
 	def __str__(self) -> str:
 		return f"({self.inner})**({self.super})"
@@ -156,6 +172,17 @@ class PowerToken(SubSuperScript, OperatorToken):
 	def latex(self) -> str:
 		return f"{self.inner.latex()}^{{{self.super.latex()}}}"
 
+class RootToken(PowerToken):
+	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None,
+	             inner_children: list[Token] = None, root_children: list[Token] = None) -> None:
+		super().__init__(parent, prev, next, inner_children, root_children)
+		self.super.token_type = RootToken
+	
+	def __str__(self) -> str:
+		return f"root({self.inner}, {self.super})"
+	
+	def latex(self) -> str:
+		return fr"\sqrt[{self.super.latex()}]{{{self.inner.latex()}}}"
 
 calculation: ContainerToken = ContainerToken()
 curr_token: ContainerToken = calculation
@@ -215,6 +242,9 @@ def add_to_calc(token_type: Type[Token], *token_args) -> None:
 		if isinstance(token, FractionToken):
 			curr_token = token.top
 			cursor_pos = -1
+		elif isinstance(token, PowerToken):
+			curr_token = token.inner
+			cursor_pos = -1
 		else:
 			cursor_pos = 0
 	else:
@@ -248,6 +278,7 @@ def add_to_calc(token_type: Type[Token], *token_args) -> None:
 					prev_token.next = token
 					if next_token is not None:
 						next_token.prev = token
+					curr_token.children.insert(cursor_pos, token)
 					curr_token = token.top
 				cursor_pos = -1
 			elif isinstance(token, PowerToken):
@@ -270,6 +301,7 @@ def add_to_calc(token_type: Type[Token], *token_args) -> None:
 					prev_token.next = token
 					if next_token is not None:
 						next_token.prev = token
+					curr_token.children.insert(cursor_pos, token)
 					curr_token = token.inner
 					cursor_pos = -1
 			else:
@@ -448,8 +480,8 @@ ui: dict[tk.Frame, list[tuple[int, int, ButtonConfig]]] = {
 		(0, 8, AddButtonConfig("9", NumberToken, 9)),
 		(1, 0, AddButtonConfig("⬚ⁿ", PowerToken)),
 		(1, 1, AddButtonConfig("⬚²", PowerToken, None, [NumberToken(None, val=2)])),
-		(1, 2, AddButtonConfig("²√⬚", "Sqrt(")),
-		(1, 3, AddButtonConfig("ⁿ√⬚", "**(1/")),
+		(1, 2, AddButtonConfig("²√⬚", RootToken, None, [NumberToken(None, val=2)])),
+		(1, 3, AddButtonConfig("ⁿ√⬚", RootToken)),
 		(1, 4, AddButtonConfig("(", OperatorToken, "(")),
 		(1, 5, AddButtonConfig(")", OperatorToken, ")")),
 		(1, 6, AddButtonConfig("4", NumberToken, 4)),
