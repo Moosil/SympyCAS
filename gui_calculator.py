@@ -217,17 +217,23 @@ class FractionToken(OperatorToken, HasContainer):
 		else:
 			return r"\dfrac{"+self.top.latex()+"}{"+self.bottom.latex()+"}"
 	
-	def get_left(self, curr_container: ContainerToken = None) -> ContainerToken | None:
+	def get_left(self, curr_container: ContainerToken = None) -> ContainerToken:
+		global cursor_pos
 		if curr_container is not self.top and curr_container is not self.bottom:
+			cursor_pos = -1
 			return self.top
 		else:
-			return None
+			cursor_pos = self.index + 1
+			return self.parent
 	
-	def get_right(self, curr_container: ContainerToken = None) -> ContainerToken | None:
+	def get_right(self, curr_container: ContainerToken = None) -> ContainerToken:
+		global cursor_pos
 		if curr_container is not self.top and curr_container is not self.bottom:
+			cursor_pos = len(self.top.children) - 1
 			return self.top
 		else:
-			return None
+			cursor_pos = self.index
+			return self.parent
 	
 	def get_up(self, curr_container: ContainerToken = None) -> ContainerToken:
 		global cursor_pos
@@ -290,7 +296,7 @@ class FractionToken(OperatorToken, HasContainer):
 				cursor_pos = min(cursor_pos, len(self.bottom.children) - 1)
 				return self.bottom
 
-class SubSuperScript(Token):
+class SubSuperScript(Token, HasContainer):
 	def __init__(self, parent: ContainerToken, index: int = -1, inner_children: list[Token] = None, sub_children: list[Token] = None,
 	             super_children: list[Token] = None) -> None:
 		super().__init__(parent, index)
@@ -324,8 +330,8 @@ class SubSuperScript(Token):
 			return self.super
 		elif curr_container is self.super or curr_container is self.sub:
 			return self.inner
-		else:
-			return None
+		else: # curr container is self.inner
+			return
 	
 	def get_right(self, curr_container: ContainerToken = None) -> ContainerToken | None:
 		if curr_container is None:
@@ -476,6 +482,23 @@ def solve(exact: bool = True) -> None:
 # 	expr = parse_expr(str_tokens, evaluate=False, transformations=transformations)
 # 	return latex(expr, mul_symbol="times")
 
+def add_token_at_cursor(token: Token) -> None:
+	global curr_token
+	global cursor_pos
+	cursor_pos += 1
+	insert_token_in_container(token, curr_token, cursor_pos)
+
+def insert_token_in_container(token: Token, container: ContainerToken, index: int = -1) -> None:
+	if index == -1:
+		container.children.append(token)
+	else:
+		container.children.insert(index, token)
+		for token in container.children[index + 1:]:
+			token.index += 1
+	token.parent = container
+	token.index = index
+	
+
 def add_to_calc(token_type: Type[Token], *token_args) -> None:
 	global calculation
 	global cursor_pos
@@ -500,25 +523,22 @@ def add_to_calc(token_type: Type[Token], *token_args) -> None:
 				prev_token.val *= 10
 				prev_token.val += token.val
 			elif isinstance(prev_token, OperatorToken):
-				curr_token.children.insert(cursor_pos + 1, token)
-				cursor_pos += 1
+				add_token_at_cursor(token)
 		elif isinstance(token, OperatorToken):
 			if isinstance(token, FractionToken):
-				if isinstance(prev_token, NumberToken | FractionToken | PowerToken):
-					token.top.children.append(prev_token)
-					prev_token.parent = token.top
+				if isinstance(prev_token, NumberToken | FractionToken | SubSuperScript):
+					insert_token_in_container(prev_token, token.top)
 					token.index -= 1
 					curr_token.children.pop(cursor_pos)
 					curr_token.children.insert(cursor_pos, token)
 					curr_token = token.bottom
 				else:
-					curr_token.children.insert(cursor_pos + 1, token)
+					add_token_at_cursor(token)
 					curr_token = token.top
 				cursor_pos = -1
 			elif isinstance(token, PowerToken):
 				if isinstance(prev_token, NumberToken | FractionToken | PowerToken):
-					token.inner.children.append(prev_token)
-					prev_token.parent = token.inner
+					insert_token_in_container(prev_token, token.inner)
 					token.index -= 1
 					curr_token.children.pop(cursor_pos)
 					curr_token.children.insert(cursor_pos, token)
@@ -528,12 +548,11 @@ def add_to_calc(token_type: Type[Token], *token_args) -> None:
 					else:
 						pass
 				else:
-					curr_token.children.insert(cursor_pos + 1, token)
+					add_token_at_cursor(token)
 					curr_token = token.inner
 					cursor_pos = -1
 			else:
-				curr_token.children.insert(cursor_pos + 1, token)
-				cursor_pos += 1
+				add_token_at_cursor(token)
 		
 	
 	latex_string = calculation.latex()
@@ -554,20 +573,17 @@ def move_cursor(x: int, y: int) -> None:
 				curr_token = curr_token.parent
 		else:
 			start_token: Token = curr_token.children[cursor_pos]
-			if cursor_pos != -1 and isinstance(start_token, FractionToken | SubSuperScript):
+			if cursor_pos != -1 and isinstance(start_token, HasContainer):
 				if x_sign == -1:
 					curr_token = start_token.get_left(curr_token)
-					cursor_pos = len(curr_token.children) - 1
 				else:
 					cursor_pos += 1
 			else:
 				cursor_pos += x_sign
 				enter_token: Token = curr_token.children[cursor_pos]
-				if isinstance(enter_token, FractionToken | SubSuperScript):
+				if isinstance(enter_token, HasContainer):
 					if x_sign == 1:
 						curr_token = enter_token.get_right(curr_token)
-						cursor_pos = -1
-					
 		x -= x_sign
 	while y != 0:
 		if not isinstance(curr_token.owner_token, FractionToken | SubSuperScript):
