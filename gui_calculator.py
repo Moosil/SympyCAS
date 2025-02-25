@@ -16,9 +16,8 @@ init_printing(full_prec=False)
 screen_direction = [1, 1]
 
 class Token:
-	def __init__(self, parent: 'ContainerToken', prev: 'Token' = None, next: 'Token' = None) -> None:
-		self.prev = prev
-		self.next = next
+	def __init__(self, parent: 'ContainerToken', index: int = -1) -> None:
+		self.index = index
 		self.parent = parent
 	
 	def __str__(self):
@@ -28,33 +27,53 @@ class Token:
 		return "oops"
 
 class ContainerToken(Token):
-	def __init__(self, parent: 'ContainerToken' = None, children: list[Token] = None, token_type: Type['Token'] = None) -> None:
-		super().__init__(parent, None, None)
+	def __init__(self, parent: 'ContainerToken' = None, children: list[Token] = None, owner_token: Token = None) -> None:
+		super().__init__(parent, -1)
 		if children is None:
 			children = []
 		self.children = children
-		self.token_type = token_type
+		self.owner_token = owner_token
 	
 	def __str__(self) -> str:
 		if len(self.children) == 0:
 			return "⬚"
 		elif len(self.children) == 1:
 			return str(self.children[0])
+		elif self.parent is None:
+			return "".join([str(c) for c in self.children])
 		else:
-			return "("+" ".join([str(c) for c in self.children])+")"
+			return "("+"".join([str(c) for c in self.children])+")"
 	
 	def latex(self) -> str:
+		global cursor_pos
+		global curr_token
 		if len(self.children) == 0:
-			return "⬚"
+			return "|" if curr_token is self and cursor_pos == -1 else "⬚"
 		elif len(self.children) == 1:
-			return self.children[0].latex()
+			if curr_token is self:
+				return ("|" if cursor_pos == -1 else "") + self.children[0].latex() + ("|" if cursor_pos == 0 else "")
+			else:
+				return self.children[0].latex()
+		elif self.parent is None:
+			if curr_token is not self:
+				return " ".join([c.latex() for c in self.children])
+			else:
+				rv = "|" if cursor_pos == -1 else ""
+				for i, c in enumerate(self.children):
+					rv += c.latex() + ("|" if i == cursor_pos else " ")
+				return rv
 		else:
-			return "("+" ".join([c.latex() for c in self.children])+")"
-		
+			if curr_token is not self:
+				return "("+" ".join([c.latex() for c in self.children])+")"
+			else:
+				rv = "(" + "|" if cursor_pos == -1 else ""
+				for i, c in enumerate(self.children):
+					rv += c.latex() + ("|" if i == cursor_pos else " ")
+				return rv + ")"
 
 class NumberToken(Token):
-	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None, val: int = 0) -> None:
-		super().__init__(parent, prev, next)
+	def __init__(self, parent: ContainerToken, index: int = -1, val: int = 0) -> None:
+		super().__init__(parent, index)
 		self.val = val
 	
 	def add_to_end(self, digit: int) -> None:
@@ -68,8 +87,8 @@ class NumberToken(Token):
 		return str(self.val)
 
 class ExactToken(Token):
-	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None, val: str = "this needs to be filled") -> None:
-		super().__init__(parent, prev, next)
+	def __init__(self, parent: ContainerToken, index: int = -1, val: str = "this needs to be filled") -> None:
+		super().__init__(parent, index)
 		self.val = val
 	
 	def __str__(self) -> str:
@@ -83,8 +102,8 @@ class ExactToken(Token):
 				return "e"
 
 class OperatorToken(Token):
-	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None, val: str = "this needs to be filled") -> None:
-		super().__init__(parent, prev, next)
+	def __init__(self, parent: ContainerToken, index: int = -1, val: str = "this needs to be filled") -> None:
+		super().__init__(parent, index)
 		self.val = val
 	
 	def __str__(self) -> str:
@@ -114,68 +133,114 @@ class OperatorToken(Token):
 				return "oops"
 
 class FractionToken(OperatorToken):
-	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None, top_children: list[Token] = None,
-	             bottom_children: list[Token] = None) -> None:
-		super().__init__(parent, prev, next, "⁄")
+	def __init__(self, parent: ContainerToken, index: int = -1, top_children: list[Token] = None, bottom_children: list[Token] = None) -> None:
+		super().__init__(parent, index, "⁄")
 		if top_children is None:
 			top_children = []
 		if bottom_children is None:
 			bottom_children = []
-		self.top: ContainerToken = ContainerToken(parent, top_children, FractionToken)
-		self.bottom: ContainerToken = ContainerToken(parent, bottom_children, FractionToken)
+		self.top: ContainerToken = ContainerToken(parent, top_children, self)
+		self.bottom: ContainerToken = ContainerToken(parent, bottom_children, self)
 	
 	def __str__(self) -> str:
 		return f"({str(self.top)}) / ({str(self.bottom)})"
+	
 	def latex(self) -> str:
-		if self.parent.token_type is SubSuperScript or self.parent.token_type is PowerToken:
+		if isinstance(self.parent.owner_token, SubSuperScript):
 			return self.top.latex()+" / "+self.bottom.latex()
 		else:
 			return r"\dfrac{"+self.top.latex()+"}{"+self.bottom.latex()+"}"
+	
+	def enter_left(self) -> ContainerToken:
+		return self.top
+	
+	def enter_right(self) -> ContainerToken:
+		return self.top
+	
+	def get_up(self, curr_container: ContainerToken) -> ContainerToken:
+		return self.top
+	
+	def get_down(self, curr_container: ContainerToken) -> ContainerToken:
+		return self.bottom
 
 class SubSuperScript(Token):
-	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None, inner_children: list[Token] = None, sub_children: list[Token] = None,
+	def __init__(self, parent: ContainerToken, index: int = -1, inner_children: list[Token] = None, sub_children: list[Token] = None,
 	             super_children: list[Token] = None) -> None:
-		super().__init__(parent, prev, next)
+		super().__init__(parent, index)
 		if inner_children is None:
 			inner_children = []
 		if sub_children is None:
 			sub_children = []
 		if super_children is None:
 			super_children = []
-		self.inner: ContainerToken = ContainerToken(parent, inner_children, SubSuperScript)
-		self.sub: ContainerToken = ContainerToken(parent, sub_children, SubSuperScript)
-		self.super: ContainerToken = ContainerToken(parent, super_children, SubSuperScript)
-		for child in self.inner.children:
+		self.inner: ContainerToken = ContainerToken(parent, inner_children, self)
+		self.sub: ContainerToken = ContainerToken(parent, sub_children, self)
+		self.super: ContainerToken = ContainerToken(parent, super_children, self)
+		for i, child in enumerate(self.inner.children):
 			child.parent = self.inner
-		for child in self.sub.children:
+			child.index = i
+		for i, child in enumerate(self.sub.children):
 			child.parent = self.sub
-		for child in self.super.children:
+			child.index = i
+		for i, child in enumerate(self.super.children):
 			child.parent = self.super
+			child.index = i
 	
 	def __str__(self) -> str:
 		return f"({self.inner})_{{{self.sub}}}^{{{self.super}}}"
 	
 	def latex(self) -> str:
 		return f"{self.inner.latex()}_{{{self.sub.latex()}}}^{{{self.super.latex()}}}"
+	
+	def enter_left(self) -> ContainerToken:
+		return self.inner
+	
+	def enter_right(self) -> ContainerToken:
+		global cursor_pos
+		cursor_pos += 1
+		return self.super
+	
+	def get_up(self, curr_container: ContainerToken) -> ContainerToken:
+		if curr_container is self.sub:
+			return self.inner
+		else:
+			return self.super
+	
+	def get_down(self, curr_container: ContainerToken) -> ContainerToken:
+		if curr_container is self.super:
+			return self.inner
+		else:
+			return self.sub
 
 class PowerToken(SubSuperScript, OperatorToken):
-	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None,
-	             inner_children: list[Token] = None, power_children: list[Token] = None) -> None:
-		super().__init__(parent=parent, prev=prev, next=next, inner_children=inner_children, sub_children=None, super_children=power_children)
+	def __init__(self, parent: ContainerToken, index: int = -1, inner_children: list[Token] = None,
+	             power_children: list[Token] = None) -> None:
+		super().__init__(parent=parent, index=index, inner_children=inner_children, sub_children=None, super_children=power_children)
 		del self.val
 		del self.sub
-		self.super.token_type = PowerToken
 	
 	def __str__(self) -> str:
 		return f"({self.inner})**({self.super})"
 	
 	def latex(self) -> str:
 		return f"{self.inner.latex()}^{{{self.super.latex()}}}"
+	
+	def enter_left(self) -> ContainerToken:
+		return self.inner
+	
+	def enter_right(self) -> ContainerToken:
+		return self.super
+	
+	def get_up(self, curr_container: ContainerToken) -> ContainerToken:
+		return self.super
+	
+	def get_down(self, curr_container: ContainerToken) -> ContainerToken:
+		return self.inner
 
 class RootToken(PowerToken):
-	def __init__(self, parent: ContainerToken, prev: Token = None, next: Token = None,
-	             inner_children: list[Token] = None, root_children: list[Token] = None) -> None:
-		super().__init__(parent, prev, next, inner_children, root_children)
+	def __init__(self, parent: ContainerToken, index: int = -1, inner_children: list[Token] = None,
+	             root_children: list[Token] = None) -> None:
+		super().__init__(parent, index, inner_children, root_children)
 		self.super.token_type = RootToken
 	
 	def __str__(self) -> str:
@@ -183,6 +248,18 @@ class RootToken(PowerToken):
 	
 	def latex(self) -> str:
 		return fr"\sqrt[{self.super.latex()}]{{{self.inner.latex()}}}"
+	
+	def enter_left(self) -> ContainerToken:
+		return self.super
+	
+	def enter_right(self) -> ContainerToken:
+		return self.inner
+	
+	def get_up(self, curr_container: ContainerToken) -> ContainerToken:
+		return self.super
+	
+	def get_down(self, curr_container: ContainerToken) -> ContainerToken:
+		return self.inner
 
 calculation: ContainerToken = ContainerToken()
 curr_token: ContainerToken = calculation
@@ -237,8 +314,8 @@ def add_to_calc(token_type: Type[Token], *token_args) -> None:
 	global cursor_pos
 	global curr_token
 	if cursor_pos == -1:
-		token: Token = token_type(curr_token, None, None, *token_args)
-		curr_token.children.append(token)
+		token: Token = token_type(curr_token, 0, *token_args)
+		curr_token.children.insert(0, token)
 		if isinstance(token, FractionToken):
 			curr_token = token.top
 			cursor_pos = -1
@@ -250,67 +327,87 @@ def add_to_calc(token_type: Type[Token], *token_args) -> None:
 	else:
 		prev_token = curr_token.children[cursor_pos]
 		next_token = None if cursor_pos + 1 >= len(curr_token.children) else curr_token.children[cursor_pos+1]
-		token: Token = token_type(curr_token, prev_token, next_token, *token_args)
+		token: Token = token_type(curr_token, cursor_pos + 1, *token_args)
 		if isinstance(token, NumberToken):
 			if isinstance(prev_token, NumberToken):
 				prev_token.val *= 10
 				prev_token.val += token.val
 			elif isinstance(prev_token, OperatorToken):
+				curr_token.children.insert(cursor_pos + 1, token)
 				cursor_pos += 1
-				prev_token.next = token
-				if next_token is not None:
-					next_token.prev = token
-				curr_token.children.insert(cursor_pos, token)
 		elif isinstance(token, OperatorToken):
 			if isinstance(token, FractionToken):
-				if isinstance(prev_token, NumberToken | PowerToken):
+				if isinstance(prev_token, NumberToken | FractionToken | PowerToken):
 					token.top.children.append(prev_token)
-					token.prev = prev_token.prev
-					prev_token.prev = None
-					prev_token.next = None
 					prev_token.parent = token.top
+					token.index -= 1
 					curr_token.children.pop(cursor_pos)
 					curr_token.children.insert(cursor_pos, token)
-					if next_token is not None:
-						next_token.prev = token
 					curr_token = token.bottom
 				else:
-					prev_token.next = token
-					if next_token is not None:
-						next_token.prev = token
-					curr_token.children.insert(cursor_pos, token)
+					curr_token.children.insert(cursor_pos + 1, token)
 					curr_token = token.top
 				cursor_pos = -1
 			elif isinstance(token, PowerToken):
-				if isinstance(prev_token, NumberToken):
+				if isinstance(prev_token, NumberToken | FractionToken | PowerToken):
 					token.inner.children.append(prev_token)
-					token.prev = prev_token.prev
-					prev_token.prev = None
-					prev_token.next = None
 					prev_token.parent = token.inner
+					token.index -= 1
 					curr_token.children.pop(cursor_pos)
 					curr_token.children.insert(cursor_pos, token)
-					if next_token is not None:
-						next_token.prev = token
 					if len(token.super.children) == 0:
 						curr_token = token.super
 						cursor_pos = -1
 					else:
 						pass
 				else:
-					prev_token.next = token
-					if next_token is not None:
-						next_token.prev = token
-					curr_token.children.insert(cursor_pos, token)
+					curr_token.children.insert(cursor_pos + 1, token)
 					curr_token = token.inner
 					cursor_pos = -1
 			else:
+				curr_token.children.insert(cursor_pos + 1, token)
 				cursor_pos += 1
-				prev_token.next = token
-				if next_token is not None:
-					next_token.prev = token
-				curr_token.children.insert(cursor_pos, token)
 		
+	
+	latex_string = calculation.latex()
+	text_area.display_latex(latex_string)
+
+def move_cursor(x: int, y: int) -> None:
+	global cursor_pos
+	global curr_token
+	global calculation
+	x_sign: int = 1 if x > 0 else -1 if x < 0 else 0
+	y_sign: int = 1 if y > 0 else -1 if y < 0 else 0
+	while x != 0:
+		if ((cursor_pos == -1) and x_sign == -1) or (cursor_pos == len(curr_token.children) - 1 and x_sign == 1):
+			if curr_token is calculation:
+				break
+			else:
+				cursor_pos = curr_token.owner_token.index + (-1 if x_sign == -1 else 0)
+				curr_token = curr_token.parent
+		else:
+			start_token: Token = curr_token.children[cursor_pos]
+			if cursor_pos != -1 and isinstance(start_token, FractionToken | SubSuperScript):
+				if x_sign == -1:
+					curr_token = start_token.enter_right()
+					cursor_pos = len(curr_token.children) - 1
+				else:
+					cursor_pos += 1
+			else:
+				cursor_pos += x_sign
+				enter_token: Token = curr_token.children[cursor_pos]
+				if isinstance(enter_token, FractionToken | SubSuperScript):
+					if x_sign == 1:
+						curr_token = enter_token.enter_left()
+						cursor_pos = -1
+					
+		x -= x_sign
+	while y != 0 and curr_token is not None:
+		if y_sign == 1:
+			curr_token = curr_token.owner_token.get_up(curr_token)
+		else:
+			curr_token = curr_token.owner_token.get_down(curr_token)
+		y -= y_sign
 	
 	latex_string = calculation.latex()
 	text_area.display_latex(latex_string)
@@ -414,34 +511,26 @@ class TextArea(tk.Frame):
 		self.latex_input.patch.set_facecolor(Base)
 		for dir in ["top", "bottom", "left", "right"]:
 			self.latex_input.spines[dir].set_color(Base)
-		self.lines: list[tk.Text | tk.Label] = [
-			tk.Text(self, height=1, width=16, font=font, bg=Base, fg=Text, highlightthickness=0, borderwidth=0, insertbackground=Text, insertborderwidth=0, insertwidth=4),
-			tk.Label(self, height=3, width=16, bg=Base, fg=Text, highlightthickness=0, borderwidth=0)
-		]
-		self.canvas = FigureCanvasTkAgg(self.figure, master=self.lines[1])
+		self.line: tk.Label = tk.Label(self, height=3, width=16, bg=Base, fg=Text, highlightthickness=0, borderwidth=0)
+		self.canvas = FigureCanvasTkAgg(self.figure, master=self.line)
 		self.canvas._tkcanvas.configure(background=Base)
 		self.canvas._tkcanvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 		
 		self.latex_input.get_xaxis().set_visible(False)
 		self.latex_input.get_yaxis().set_visible(False)
 		
-		self.lines[0].grid(column=0, row=0, sticky=tk.EW)
-		self.lines[1].grid(column=0, row=1, sticky=tk.NSEW)
-		
-		for colour in rainbow:
-			self.lines[0].tag_config(colour, foreground=colour)
-		self.lines[0].tag_config(Overlay1, foreground=Overlay1)
-		self.lines[0].tag_config("italic", font=italic_font)
+		self.line.grid(column=0, row=1, sticky=tk.NSEW)
 		self.grid_columnconfigure(0, weight=1)
 		self.grid_rowconfigure(1, weight=1)
-		def event(e: tk.Event):
-			if e.char.isprintable():
-				add_to_calc(e.char)
-			return "break"
-		self.lines[0].bind("<Key>", event)
-	
-	def __getitem__(self, item):
-		return self.lines[item]
+		#TODO: Add typing with keyboard
+		# def event(e: tk.Event):
+		# 	if e.char.isprintable():
+		# 		add_to_calc(e.char)
+		# 	return "break"
+		# self.line.bind("<Key>", event)
+		latex_string = calculation.latex()
+		self.display_latex(latex_string)
+		
 	
 	def display_latex(self, latex_str: str) -> None:
 		self.latex_input.clear()
@@ -470,7 +559,7 @@ def switch_to_window(window) -> None:
 ui: dict[tk.Frame, list[tuple[int, int, ButtonConfig]]] = {
 	main_button_area: [
 		(0, 0, AddButtonConfig("+", OperatorToken, "+")),
-		(0, 1, AddButtonConfig("-", OperatorToken, "+")),
+		(0, 1, AddButtonConfig("-", OperatorToken, "-")),
 		(0, 2, AddButtonConfig("÷", OperatorToken, "/")),
 		(0, 3, AddButtonConfig("×", OperatorToken, "*")),
 		(0, 4, AddButtonConfig("⬚\n—\n⬚", FractionToken, font=small_font)),
@@ -496,15 +585,15 @@ ui: dict[tk.Frame, list[tuple[int, int, ButtonConfig]]] = {
 		
 		# (3, 0, AddButtonConfig("π", ExactToken, "pi")),
 		# (3, 1, AddButtonConfig("e", ExactToken, "E")),
-		(3, 1, FunctionButtonConfig("↑", None)),
+		(3, 1, FunctionButtonConfig("↑", lambda: move_cursor(0, 1))),
 		
 		(3, 6, FunctionButtonConfig("=", solve)),
 		(3, 7, AddButtonConfig("0", NumberToken, 0)),
 		(3, 8, AddButtonConfig("Ans", ExactToken, "Ans")),
 		
-		(4, 0, FunctionButtonConfig("←", None)),
-		(4, 1, FunctionButtonConfig("↓", None)),
-		(4, 2, FunctionButtonConfig("→", None)),
+		(4, 0, FunctionButtonConfig("←", lambda: move_cursor(-1, 0))),
+		(4, 1, FunctionButtonConfig("↓", lambda: move_cursor(0, -1))),
+		(4, 2, FunctionButtonConfig("→", lambda: move_cursor(1, 0))),
 		(4, 6, FunctionButtonConfig("≈", lambda: solve(False))),
 		(4, 7, FunctionButtonConfig("⌫", backspace_calc)),
 		(4, 8, FunctionButtonConfig("C", clear_calc)),
@@ -580,7 +669,7 @@ for frame, ui_elements in ui.items():
 		elif isinstance(cfg, FunctionButtonConfig):
 			fn_name: str = cfg.text
 			fn_callable: str = cfg.func
-			btn = HoverButton(frame, text=fn_name, command=fn_callable)
+			btn = HoverButton(frame, text=fn_name, command=lambda fn_callable=fn_callable: fn_callable())
 			btn.grid(row=row, column=column)
 			btns.append(btn)
 
