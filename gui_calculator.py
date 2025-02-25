@@ -108,6 +108,35 @@ class ContainerToken(Token):
 					rv += c.latex() + ("|" if i == cursor_pos else " ")
 				return rv
 
+class HasContainer:
+	def get_left(self, curr_container: ContainerToken = None) -> ContainerToken:
+		"""
+		:param curr_container: current container
+		:return: the container to the left of this one
+		"""
+		pass
+	
+	def get_right(self, curr_container: ContainerToken = None) -> ContainerToken:
+		"""
+		:param curr_container: current container
+		:return: the container to the right of this one
+		"""
+		pass
+	
+	def get_up(self, curr_container: ContainerToken = None) -> ContainerToken:
+		"""
+		:param curr_container: current container
+		:return: the container above this one
+		"""
+		pass
+	
+	def get_down(self, curr_container: ContainerToken = None) -> ContainerToken:
+		"""
+		:param curr_container: current container
+		:return: the container below this one
+		"""
+		pass
+
 class NumberToken(Token):
 	def __init__(self, parent: ContainerToken, index: int = -1, val: int = 0) -> None:
 		super().__init__(parent, index)
@@ -169,7 +198,7 @@ class OperatorToken(Token):
 			case _:
 				return "oops"
 
-class FractionToken(OperatorToken):
+class FractionToken(OperatorToken, HasContainer):
 	def __init__(self, parent: ContainerToken, index: int = -1, top_children: list[Token] = None, bottom_children: list[Token] = None) -> None:
 		super().__init__(parent, index, "⁄")
 		if top_children is None:
@@ -200,36 +229,33 @@ class FractionToken(OperatorToken):
 		else:
 			return None
 	
-	def get_up(self, curr_container: ContainerToken = None) -> ContainerToken | None:
+	def get_up(self, curr_container: ContainerToken = None) -> ContainerToken:
 		global cursor_pos
 		if curr_container is None:
-			try:
-				new_cursor_pos = min(cursor_pos, len(self.top.children) - 1)
-				rv = self.top.children[new_cursor_pos].get_up(None)
-				cursor_pos = new_cursor_pos
-				return rv
-			except:
-				cursor_pos = min(cursor_pos, len(self.top.children) - 1)
-				return self.top
-		
-		if curr_container is self.bottom:
 			cursor_pos = min(cursor_pos, len(self.top.children) - 1)
-			try:
-				return self.top.children[cursor_pos].get_down()
-			except:
+			top_children: Token = self.top.children[cursor_pos]
+			if isinstance(top_children, HasContainer):
+				rv: ContainerToken = top_children.get_up(None)
+				cursor_pos = min(cursor_pos, len(rv.children) - 1)
+				return rv
+			else:
 				return self.top
-		elif curr_container is self.top:
-			try:
-				outer_top = self.parent.owner_token.get_up(self.parent)
-				try:
-					new_cursor_pos = min(cursor_pos, len(outer_top.children) - 1)
-					rv = outer_top.children[new_cursor_pos].get_down(None)
-					cursor_pos = new_cursor_pos
+		elif curr_container is self.bottom:
+			cursor_pos = min(cursor_pos, len(self.top.children) - 1)
+			return self.top
+		else: # curr_container is self.top
+			outer_token = self.parent.owner_token
+			if isinstance(outer_token, HasContainer):
+				outer_top = outer_token.get_up(self.parent)
+				cursor_pos = min(cursor_pos, len(outer_top.children) - 1)
+				outer_top_bottom = outer_top.children[cursor_pos]
+				if isinstance(outer_top_bottom, HasContainer):
+					rv: ContainerToken = outer_top_bottom.get_down(None)
+					cursor_pos = min(cursor_pos, len(rv.children) - 1)
 					return rv
-				except:
-					cursor_pos = min(cursor_pos, len(outer_top.children) - 1)
+				else:
 					return outer_top
-			except:
+			else:
 				cursor_pos = min(cursor_pos, len(self.top.children) - 1)
 				return self.top
 			
@@ -237,33 +263,30 @@ class FractionToken(OperatorToken):
 	def get_down(self, curr_container: ContainerToken = None) -> ContainerToken | None:
 		global cursor_pos
 		if curr_container is None:
-			try:
-				new_cursor_pos = min(cursor_pos, len(self.bottom.children) - 1)
-				rv = self.bottom.children[new_cursor_pos].get_down(None)
-				cursor_pos = new_cursor_pos
-				return rv
-			except:
-				cursor_pos = min(cursor_pos, len(self.bottom.children) - 1)
-				return self.bottom
-			
-		if curr_container is self.top:
 			cursor_pos = min(cursor_pos, len(self.bottom.children) - 1)
-			try:
-				return self.bottom.children[cursor_pos].get_up()
-			except:
+			bottom_children: Token = self.bottom.children[cursor_pos]
+			if isinstance(bottom_children, HasContainer):
+				rv: ContainerToken = bottom_children.get_down(None)
+				cursor_pos = min(cursor_pos, len(rv.children) - 1)
+				return rv
+			else:
 				return self.bottom
-		elif curr_container is self.bottom:
-			try:
-				outer_bottom = self.parent.owner_token.get_down(self.parent)
-				try:
-					new_cursor_pos = min(cursor_pos, len(outer_bottom.children) - 1)
-					rv = outer_bottom.children[new_cursor_pos].get_up(None)
-					cursor_pos = new_cursor_pos
+		elif curr_container is self.top:
+			cursor_pos = min(cursor_pos, len(self.bottom.children) - 1)
+			return self.bottom
+		else: # curr_container is self.bottom
+			outer_token = self.parent.owner_token
+			if isinstance(outer_token, HasContainer):
+				outer_bottom = outer_token.get_down(self.parent)
+				cursor_pos = min(cursor_pos, len(outer_bottom.children) - 1)
+				outer_bottom_top = outer_bottom.children[cursor_pos]
+				if isinstance(outer_bottom_top, HasContainer):
+					rv: ContainerToken = outer_bottom_top.get_up(None)
+					cursor_pos = min(cursor_pos, len(rv.children) - 1)
 					return rv
-				except:
-					cursor_pos = min(cursor_pos, len(outer_bottom.children) - 1)
+				else:
 					return outer_bottom
-			except:
+			else:
 				cursor_pos = min(cursor_pos, len(self.bottom.children) - 1)
 				return self.bottom
 
