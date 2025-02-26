@@ -6,6 +6,7 @@ from tkinter.font import Font
 from sympy import *
 import matplotlib
 from typing import Type
+from copy import copy, deepcopy
 import matplotlib.pyplot as plt
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -151,6 +152,21 @@ class NumberToken(Token):
 	
 	def latex(self) -> str:
 		return str(self.val)
+	
+	def __copy__(self) -> 'NumberToken':
+		cls = self.__class__
+		result = cls.__new__(cls)
+		result.__dict__.update(self.__dict__)
+		return result
+	
+	def __deepcopy__(self, memo):
+		cls = self.__class__
+		result = cls.__new__(cls)
+		memo[id(self)] = result
+		for k, v in self.__dict__.items():
+			setattr(result, k, deepcopy(v, memo))
+		return result
+	
 
 class ExactToken(Token):
 	def __init__(self, parent: ContainerToken, index: int = -1, val: str = "this needs to be filled") -> None:
@@ -219,21 +235,22 @@ class FractionToken(OperatorToken, HasContainer):
 	
 	def get_left(self, curr_container: ContainerToken = None) -> ContainerToken:
 		global cursor_pos
-		if curr_container is not self.top and curr_container is not self.bottom:
-			cursor_pos = -1
-			return self.top
-		else:
+		if curr_container is self.top or curr_container is self.bottom:
 			cursor_pos = self.index + 1
 			return self.parent
+		else: # curr_container is outside of this token
+			cursor_pos = -1
+			return self.top
+			
 	
 	def get_right(self, curr_container: ContainerToken = None) -> ContainerToken:
 		global cursor_pos
-		if curr_container is not self.top and curr_container is not self.bottom:
-			cursor_pos = len(self.top.children) - 1
-			return self.top
-		else:
+		if curr_container is self.top or curr_container is self.bottom:
 			cursor_pos = self.index
 			return self.parent
+		else: # curr_container is outside of this token
+			cursor_pos = len(self.top.children) - 1
+			return self.top
 	
 	def get_up(self, curr_container: ContainerToken = None) -> ContainerToken:
 		global cursor_pos
@@ -264,7 +281,6 @@ class FractionToken(OperatorToken, HasContainer):
 			else:
 				cursor_pos = min(cursor_pos, len(self.top.children) - 1)
 				return self.top
-			
 	
 	def get_down(self, curr_container: ContainerToken = None) -> ContainerToken | None:
 		global cursor_pos
@@ -326,39 +342,135 @@ class SubSuperScript(Token, HasContainer):
 		return f"{self.inner.latex()}_{{{self.sub.latex()}}}^{{{self.super.latex()}}}"
 	
 	def get_left(self, curr_container: ContainerToken = None) -> ContainerToken | None:
+		global cursor_pos
 		if curr_container is None:
-			return self.super
-		elif curr_container is self.super or curr_container is self.sub:
-			return self.inner
-		else: # curr container is self.inner
-			return
-	
-	def get_right(self, curr_container: ContainerToken = None) -> ContainerToken | None:
-		if curr_container is None:
+			cursor_pos = 0
+			inner_children: Token = self.inner.children[cursor_pos]
+			if isinstance(inner_children, HasContainer):
+				rv: ContainerToken = inner_children.get_left(None)
+				cursor_pos = -1
+				return rv
+			else:
+				return self.inner
+		if curr_container is self.super or curr_container is self.sub:
+			cursor_pos = len(self.inner.children) - 1
 			return self.inner
 		elif curr_container is self.inner:
+			outer_token = self.parent.owner_token
+			if isinstance(outer_token, HasContainer):
+				outer_left = outer_token.get_left(self.parent)
+				cursor_pos = len(outer_left.children) - 1
+				outer_left_right = outer_left.children[cursor_pos]
+				if isinstance(outer_left_right, HasContainer):
+					rv: ContainerToken = outer_left_right.get_right(None)
+					cursor_pos = len(rv.children) - 1
+					return rv
+				else:
+					return outer_left
+			else:
+				cursor_pos = len(self.inner.children) - 1
+				return self.inner
+		else: # curr container is something else
+			cursor_pos = len(self.super.children) - 1
 			return self.super
-		else:
-			return None
+	
+	def get_right(self, curr_container: ContainerToken = None) -> ContainerToken | None:
+		global cursor_pos
+		if curr_container is None:
+			cursor_pos = len(self.super.children) - 1
+			super_children: Token = self.super.children[cursor_pos]
+			if isinstance(super_children, HasContainer):
+				rv: ContainerToken = super_children.get_right(None)
+				cursor_pos = len(rv.children) - 1
+				return rv
+			else:
+				return self.super
+		if curr_container is self.inner:
+			cursor_pos = -1
+			return self.super
+		elif curr_container is self.super or curr_container is self.sub:
+			outer_token = self.parent.owner_token
+			if isinstance(outer_token, HasContainer):
+				outer_right = outer_token.get_right(self.parent)
+				cursor_pos = -1
+				outer_right_left = outer_right.children[cursor_pos]
+				if isinstance(outer_right_left, HasContainer):
+					rv: ContainerToken = outer_right_left.get_left(None)
+					cursor_pos = len(rv.children) - 1
+					return rv
+				else:
+					return outer_right
+			else:
+				cursor_pos = -1
+				return self.super
+		else: # curr container is something else
+			cursor_pos = -1
+			return self.inner
 	
 	def get_up(self, curr_container: ContainerToken = None) -> ContainerToken | None:
 		global cursor_pos
-		if curr_container is self.inner or curr_container is self.sub:
+		if curr_container is None:
+			cursor_pos = min(cursor_pos, len(self.super.children) - 1)
+			super_children: Token = self.super.children[cursor_pos]
+			if isinstance(super_children, HasContainer):
+				rv: ContainerToken = super_children.get_up(None)
+				cursor_pos = min(cursor_pos, len(rv.children) - 1)
+				return rv
+			else:
+				return self.super
+		elif curr_container is self.inner:
+			cursor_pos = -1
 			return self.super
-		elif curr_container is self.super:
-			try:
-				return self.super.children[cursor_pos].get_up(self.super)
-			except:
+		elif curr_container is self.sub:
+			cursor_pos = min(cursor_pos, len(self.super.children) - 1)
+			return self.super
+		else: # curr_container is self.super
+			outer_token = self.parent.owner_token
+			if isinstance(outer_token, HasContainer):
+				outer_top = outer_token.get_up(self.parent)
+				cursor_pos = min(cursor_pos, len(outer_top.children) - 1)
+				outer_top_bottom = outer_top.children[cursor_pos]
+				if isinstance(outer_top_bottom, HasContainer):
+					rv: ContainerToken = outer_top_bottom.get_down(None)
+					cursor_pos = min(cursor_pos, len(rv.children) - 1)
+					return rv
+				else:
+					return outer_top
+			else: # if it's something else
+				cursor_pos = min(cursor_pos, len(self.super.children) - 1)
 				return self.super
 	
 	def get_down(self, curr_container: ContainerToken = None) -> ContainerToken | None:
 		global cursor_pos
-		if curr_container is self.inner or curr_container is self.super:
+		if curr_container is None:
+			cursor_pos = min(cursor_pos, len(self.sub.children) - 1)
+			sub_children: Token = self.sub.children[cursor_pos]
+			if isinstance(sub_children, HasContainer):
+				rv: ContainerToken = sub_children.get_down(None)
+				cursor_pos = min(cursor_pos, len(rv.children) - 1)
+				return rv
+			else:
+				return self.sub
+		elif curr_container is self.inner:
+			cursor_pos = -1
 			return self.sub
-		elif curr_container is self.sub:
-			try:
-				return self.sub.children[cursor_pos].get_down(self.sub)
-			except:
+		elif curr_container is self.super:
+			cursor_pos = min(cursor_pos, len(self.sub.children) - 1)
+			return self.sub
+		else: # curr_container is self.sub
+			outer_token = self.parent.owner_token
+			if isinstance(outer_token, HasContainer):
+				outer_bottom = outer_token.get_up(self.parent)
+				cursor_pos = min(cursor_pos, len(outer_bottom.children) - 1)
+				outer_bottom_top = outer_bottom.children[cursor_pos]
+				if isinstance(outer_bottom_top, HasContainer):
+					rv: ContainerToken = outer_bottom_top.get_up(None)
+					cursor_pos = min(cursor_pos, len(rv.children) - 1)
+					return rv
+				else:
+					return outer_bottom
+			else: # if it's something else
+				cursor_pos = min(cursor_pos, len(self.sub.children) - 1)
 				return self.sub
 
 class PowerToken(SubSuperScript, OperatorToken):
@@ -366,29 +478,12 @@ class PowerToken(SubSuperScript, OperatorToken):
 	             power_children: list[Token] = None) -> None:
 		super().__init__(parent=parent, index=index, inner_children=inner_children, sub_children=None, super_children=power_children)
 		del self.val
-		del self.sub
 	
 	def __str__(self) -> str:
 		return f"({self.inner})**({self.super})"
 	
 	def latex(self) -> str:
 		return f"{self.inner.latex()}^{{{self.super.latex()}}}"
-	
-	def get_left(self, curr_container: ContainerToken = None) -> ContainerToken | None:
-		if curr_container is None:
-			return self.super
-		elif curr_container is self.super:
-			return self.inner
-		else:
-			return None
-	
-	def get_right(self, curr_container: ContainerToken = None) -> ContainerToken | None:
-		if curr_container is None:
-			return self.inner
-		elif curr_container is self.inner:
-			return self.super
-		else:
-			return None
 	
 	def get_up(self, curr_container: ContainerToken = None) -> ContainerToken | None:
 		global cursor_pos
@@ -402,13 +497,33 @@ class PowerToken(SubSuperScript, OperatorToken):
 	
 	def get_down(self, curr_container: ContainerToken = None) -> ContainerToken | None:
 		global cursor_pos
-		if curr_container is self.super:
+		if curr_container is None:
+			cursor_pos = min(cursor_pos, len(self.inner.children) - 1)
+			inner_children: Token = self.inner.children[cursor_pos]
+			if isinstance(inner_children, HasContainer):
+				rv: ContainerToken = inner_children.get_down(None)
+				cursor_pos = min(cursor_pos, len(rv.children) - 1)
+				return rv
+			else:
+				return self.inner
+		elif curr_container is self.super:
+			cursor_pos = len(self.inner.children) - 1
 			return self.inner
-		elif curr_container is self.inner:
-			try:
-				return self.sub.children[cursor_pos].get_down(self.sub)
-			except:
-				return self.sub
+		else: # curr_container is self.inner
+			outer_token = self.parent.owner_token
+			if isinstance(outer_token, HasContainer):
+				outer_bottom = outer_token.get_up(self.parent)
+				cursor_pos = min(cursor_pos, len(outer_bottom.children) - 1)
+				outer_bottom_top = outer_bottom.children[cursor_pos]
+				if isinstance(outer_bottom_top, HasContainer):
+					rv: ContainerToken = outer_bottom_top.get_up(None)
+					cursor_pos = min(cursor_pos, len(rv.children) - 1)
+					return rv
+				else:
+					return outer_bottom
+			else: # if it's something else
+				cursor_pos = min(cursor_pos, len(self.inner.children) - 1)
+				return self.inner
 
 class RootToken(PowerToken):
 	def __init__(self, parent: ContainerToken, index: int = -1, inner_children: list[Token] = None,
@@ -422,17 +537,71 @@ class RootToken(PowerToken):
 	def latex(self) -> str:
 		return fr"\sqrt[{self.super.latex()}]{{{self.inner.latex()}}}"
 	
-	def enter_left(self) -> ContainerToken:
-		return self.super
+	def get_left(self, curr_container: ContainerToken = None) -> ContainerToken | None:
+		global cursor_pos
+		if curr_container is None:
+			cursor_pos = 0
+			super_children: Token = self.super.children[cursor_pos]
+			if isinstance(super_children, HasContainer):
+				rv: ContainerToken = super_children.get_left(None)
+				cursor_pos = -1
+				return rv
+			else:
+				return self.super
+		if curr_container is self.inner:
+			cursor_pos = len(self.super.children) - 1
+			return self.super
+		elif curr_container is self.super:
+			outer_token = self.parent.owner_token
+			if isinstance(outer_token, HasContainer):
+				outer_left = outer_token.get_left(self.parent)
+				cursor_pos = len(outer_left.children) - 1
+				outer_left_right = outer_left.children[cursor_pos]
+				if isinstance(outer_left_right, HasContainer):
+					rv: ContainerToken = outer_left_right.get_right(None)
+					cursor_pos = len(rv.children) - 1
+					return rv
+				else:
+					return outer_left
+			else:
+				cursor_pos = len(self.super.children) - 1
+				return self.super
+		else: # curr container is something else
+			cursor_pos = len(self.inner.children) - 1
+			return self.inner
 	
-	def enter_right(self) -> ContainerToken:
-		return self.inner
-	
-	def get_up(self, curr_container: ContainerToken) -> ContainerToken:
-		return self.super
-	
-	def get_down(self, curr_container: ContainerToken) -> ContainerToken:
-		return self.inner
+	def get_right(self, curr_container: ContainerToken = None) -> ContainerToken | None:
+		global cursor_pos
+		if curr_container is None:
+			cursor_pos = len(self.super.children) - 1
+			inner_children: Token = self.inner.children[cursor_pos]
+			if isinstance(inner_children, HasContainer):
+				rv: ContainerToken = inner_children.get_right(None)
+				cursor_pos = len(rv.children) - 1
+				return rv
+			else:
+				return self.inner
+		if curr_container is self.super:
+			cursor_pos = -1
+			return self.inner
+		elif curr_container is self.inner:
+			outer_token = self.parent.owner_token
+			if isinstance(outer_token, HasContainer):
+				outer_right = outer_token.get_right(self.parent)
+				cursor_pos = -1
+				outer_right_left = outer_right.children[cursor_pos]
+				if isinstance(outer_right_left, HasContainer):
+					rv: ContainerToken = outer_right_left.get_left(None)
+					cursor_pos = len(rv.children) - 1
+					return rv
+				else:
+					return outer_right
+			else:
+				cursor_pos = -1
+				return self.inner
+		else: # curr container is something else
+			cursor_pos = -1
+			return self.super
 
 calculation: ContainerToken = ContainerToken()
 curr_token: ContainerToken = calculation
@@ -537,14 +706,14 @@ def add_to_calc(token_type: Type[Token], *token_args) -> None:
 					curr_token = token.top
 				cursor_pos = -1
 			elif isinstance(token, PowerToken):
-				if isinstance(prev_token, NumberToken | FractionToken | PowerToken):
+				if isinstance(prev_token, NumberToken | FractionToken | SubSuperScript):
 					insert_token_in_container(prev_token, token.inner)
 					token.index -= 1
 					curr_token.children.pop(cursor_pos)
 					curr_token.children.insert(cursor_pos, token)
 					if len(token.super.children) == 0:
 						curr_token = token.super
-						cursor_pos = -1
+						token.index = -1
 					else:
 						pass
 				else:
@@ -573,17 +742,17 @@ def move_cursor(x: int, y: int) -> None:
 				curr_token = curr_token.parent
 		else:
 			start_token: Token = curr_token.children[cursor_pos]
-			if cursor_pos != -1 and isinstance(start_token, HasContainer):
-				if x_sign == -1:
-					curr_token = start_token.get_left(curr_token)
+			next_token: Token = curr_token.children[cursor_pos + x_sign]
+			if x_sign == 1:
+				if isinstance(next_token, HasContainer):
+					curr_token = next_token.get_left(curr_token)
 				else:
-					cursor_pos += 1
-			else:
-				cursor_pos += x_sign
-				enter_token: Token = curr_token.children[cursor_pos]
-				if isinstance(enter_token, HasContainer):
-					if x_sign == 1:
-						curr_token = enter_token.get_right(curr_token)
+					cursor_pos += x_sign
+			else: # x_sign == -1
+				if isinstance(start_token, HasContainer):
+					curr_token = start_token.get_right(curr_token)
+				else:
+					cursor_pos += x_sign
 		x -= x_sign
 	while y != 0:
 		if not isinstance(curr_token.owner_token, FractionToken | SubSuperScript):
@@ -627,6 +796,15 @@ class AddButtonConfig(ButtonConfig):
 		self.token_type = token_type
 		self.token_args = token_args
 		self.kwargs = kwargs
+	
+	def get_args(self) -> tuple:
+		args = []
+		for arg in self.token_args:
+			try:
+				args.append(deepcopy(arg))
+			except:
+				args.append(arg)
+		return tuple(args)
 
 class FunctionButtonConfig(ButtonConfig):
 	def __init__(self, text: str, func: callable) -> None:
@@ -851,9 +1029,8 @@ for frame, ui_elements in ui.items():
 		if isinstance(cfg, AddButtonConfig):
 			fancy: str = cfg.text
 			token_type: Type[Token] = cfg.token_type
-			token_args = cfg.token_args
 			kwargs = cfg.kwargs
-			btn = HoverButton(frame, text=fancy, command=lambda token_type=token_type, token_args=token_args: add_to_calc(token_type, *token_args), **kwargs)
+			btn = HoverButton(frame, text=fancy, command=lambda token_type=token_type, cfg=cfg: add_to_calc(token_type, *cfg.get_args()), **kwargs)
 			btn.grid(row=row, column=column, sticky=tk.NSEW)
 			btns.append(btn)
 		elif isinstance(cfg, FunctionButtonConfig):
