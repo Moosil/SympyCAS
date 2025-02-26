@@ -236,10 +236,10 @@ class FractionToken(OperatorToken, HasContainer):
 	def get_left(self, curr_container: ContainerToken = None) -> ContainerToken:
 		global cursor_pos
 		if curr_container is self.top or curr_container is self.bottom:
-			cursor_pos = self.index + 1
+			cursor_pos = self.index - 1
 			return self.parent
 		else: # curr_container is outside of this token
-			cursor_pos = -1
+			cursor_pos = len(self.top.children) - 1
 			return self.top
 			
 	
@@ -249,7 +249,7 @@ class FractionToken(OperatorToken, HasContainer):
 			cursor_pos = self.index
 			return self.parent
 		else: # curr_container is outside of this token
-			cursor_pos = len(self.top.children) - 1
+			cursor_pos = - 1
 			return self.top
 	
 	def get_up(self, curr_container: ContainerToken = None) -> ContainerToken:
@@ -485,16 +485,6 @@ class PowerToken(SubSuperScript, OperatorToken):
 	def latex(self) -> str:
 		return f"{self.inner.latex()}^{{{self.super.latex()}}}"
 	
-	def get_up(self, curr_container: ContainerToken = None) -> ContainerToken | None:
-		global cursor_pos
-		if curr_container is self.inner:
-			return self.super
-		elif curr_container is self.super:
-			try:
-				return self.super.children[cursor_pos].get_up(self.super)
-			except:
-				return self.super
-	
 	def get_down(self, curr_container: ContainerToken = None) -> ContainerToken | None:
 		global cursor_pos
 		if curr_container is None:
@@ -713,9 +703,10 @@ def add_to_calc(token_type: Type[Token], *token_args) -> None:
 					curr_token.children.insert(cursor_pos, token)
 					if len(token.super.children) == 0:
 						curr_token = token.super
-						token.index = -1
+						cursor_pos = -1
 					else:
-						pass
+						curr_token = token.inner
+						cursor_pos = 0
 				else:
 					add_token_at_cursor(token)
 					curr_token = token.inner
@@ -734,25 +725,47 @@ def move_cursor(x: int, y: int) -> None:
 	x_sign: int = 1 if x > 0 else -1 if x < 0 else 0
 	y_sign: int = 1 if y > 0 else -1 if y < 0 else 0
 	while x != 0:
-		if ((cursor_pos == -1) and x_sign == -1) or (cursor_pos == len(curr_token.children) - 1 and x_sign == 1):
-			if curr_token is calculation:
-				break
-			else:
-				cursor_pos = curr_token.owner_token.index + (-1 if x_sign == -1 else 0)
-				curr_token = curr_token.parent
-		else:
-			start_token: Token = curr_token.children[cursor_pos]
-			next_token: Token = curr_token.children[cursor_pos + x_sign]
-			if x_sign == 1:
-				if isinstance(next_token, HasContainer):
-					curr_token = next_token.get_left(curr_token)
+		if curr_token is calculation and ((cursor_pos == -1 and x_sign == -1) or (cursor_pos == len(curr_token.children) - 1 and x_sign == 1)):
+			break
+		else: # cannot go outside main calculation
+			if len(curr_token.children) != 0:
+				if x_sign == 1:
+					if cursor_pos == len(curr_token.children) - 1:
+						if isinstance(curr_token.owner_token, HasContainer):
+							curr_token = curr_token.owner_token.get_right(curr_token)
+						else:
+							break
+					else: # if cursor is not at end of line
+						next_token = curr_token.children[cursor_pos + 1]
+						if isinstance(next_token, HasContainer):
+							curr_token = next_token.get_right(curr_token)
+						else: # if can pass next token without going into it; next token has no containers
+							cursor_pos += x_sign
+				else: # x_sign == -1
+					if cursor_pos == -1:
+						if isinstance(curr_token.owner_token, HasContainer):
+							curr_token = curr_token.owner_token.get_left(curr_token)
+						else:
+							break
+					else: # if cursor is not at start of line
+						start_token: Token = curr_token.children[cursor_pos]
+						if isinstance(start_token, HasContainer):
+							curr_token = start_token.get_left(curr_token)
+						else: # if can pass next token without going into it; next token has no containers
+							cursor_pos += x_sign
+			else: # if token is empty
+				if isinstance(curr_token, ContainerToken) and isinstance(curr_token.parent, HasContainer):
+					if x_sign == 1:
+						curr_token = curr_token.parent.get_right(curr_token.owner_token)
+					else: # x_sign == -1
+						cursor_pos += curr_token.parent.get_left(curr_token.owner_token)
 				else:
-					cursor_pos += x_sign
-			else: # x_sign == -1
-				if isinstance(start_token, HasContainer):
-					curr_token = start_token.get_right(curr_token)
-				else:
-					cursor_pos += x_sign
+					raise Exception("Cursor got stuck LMAO D:")
+				
+				
+		
+					
+				
 		x -= x_sign
 	while y != 0:
 		if not isinstance(curr_token.owner_token, FractionToken | SubSuperScript):
