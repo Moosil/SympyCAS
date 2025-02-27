@@ -41,6 +41,9 @@ class Token:
 		:return: LaTeX representation of the token
 		"""
 		return "oops"
+	
+	def __repr__(self) -> str:
+		return f"{self.__class__.__name__}({hash(self.parent)},{self.index})"
 
 class ContainerToken(Token):
 	"""
@@ -59,7 +62,20 @@ class ContainerToken(Token):
 			children = []
 		self.children = children
 		self.owner_token = owner_token
+		for i, child in enumerate(self.children):
+			child.parent = self
+			child.index = i
 	
+	def add_child(self, child: Token, index: int = -1) -> None:
+		if index == -1:
+			self.children.append(child)
+		else:
+			for i in range(index, len(self.children) - 1):
+				self.children[i].index += 1
+			child.index = index
+			child.parent = self
+			self.children.insert(index, child)
+			
 	def __str__(self) -> str:
 		"""
 		:return: A string representation of this token for use with sympy
@@ -108,6 +124,9 @@ class ContainerToken(Token):
 				for i, c in enumerate(self.children):
 					rv += c.latex() + ("|" if i == cursor_pos else " ")
 				return rv
+	
+	def __repr__(self) -> str:
+		return f"{self.__class__.__name__}({hash(self.parent)},{[repr(c) for c in self.children]},{hash(self.owner_token)})"
 
 class HasContainer:
 	def get_left(self, curr_container: ContainerToken = None) -> ContainerToken:
@@ -138,7 +157,7 @@ class HasContainer:
 		"""
 		pass
 
-class NumberToken(Token):
+class DigitToken(Token):
 	def __init__(self, parent: ContainerToken, index: int = -1, val: int = 0) -> None:
 		super().__init__(parent, index)
 		self.val = val
@@ -152,6 +171,43 @@ class NumberToken(Token):
 	
 	def latex(self) -> str:
 		return str(self.val)
+	
+	def __copy__(self) -> 'DigitToken':
+		cls = self.__class__
+		result = cls.__new__(cls)
+		result.__dict__.update(self.__dict__)
+		return result
+	
+	def __deepcopy__(self, memo):
+		cls = self.__class__
+		result = cls.__new__(cls)
+		memo[id(self)] = result
+		for k, v in self.__dict__.items():
+			setattr(result, k, deepcopy(v, memo))
+		return result
+	
+	def __repr__(self) -> str:
+		return f"{self.__class__.__name__}({hash(self.parent)},{self.index},{self.val})"
+
+class NumberToken(Token, HasContainer):
+	def __init__(self, parent: ContainerToken, index: int = -1, children: list[DigitToken] = None) -> None:
+		super().__init__(parent, index)
+		if children is None:
+			children = []
+		self.val = ContainerToken(parent, children, self)
+	
+	@classmethod
+	def from_number(cls, parent: ContainerToken, index: int = -1, val: int = 0) -> 'NumberToken':
+		rv = cls(parent, index, [DigitToken(None, i, int(digit)) for i, digit in enumerate(str(val))])
+		for i in range(len(str(val))):
+			rv.val.children[i].parent = rv.val
+		return rv
+	
+	def __str__(self) -> str:
+		return str(self.val)
+	
+	def latex(self) -> str:
+		return self.val.latex()
 	
 	def __copy__(self) -> 'NumberToken':
 		cls = self.__class__
@@ -167,6 +223,58 @@ class NumberToken(Token):
 			setattr(result, k, deepcopy(v, memo))
 		return result
 	
+	def get_left(self, curr_container: ContainerToken = None) -> ContainerToken:
+		global cursor_pos
+		if curr_container is None:
+			cursor_pos = -1
+			return self.val
+		elif curr_container is self.val:
+			if cursor_pos == -1:
+				cursor_pos = self.index - 1
+				return self.parent
+			else:
+				cursor_pos -= 1
+				return self.val
+		else: # curr_container is outside of this token
+			cursor_pos = len(self.val.children) - 2
+			return self.val
+	
+	def get_right(self, curr_container: ContainerToken = None) -> ContainerToken:
+		global cursor_pos
+		if curr_container is None:
+			cursor_pos = len(self.val.children) - 1
+			return self.val
+		elif curr_container is self.val:
+			if cursor_pos == len(self.val.children) - 1:
+				cursor_pos = self.index
+				return self.parent
+			else:
+				cursor_pos += 1
+				return self.val
+		else: # curr_container is outside of this token
+			cursor_pos = 0
+			return self.val
+	
+	def get_up(self, curr_container: ContainerToken = None) -> ContainerToken:
+		global cursor_pos
+		if curr_container is None:
+			return self.val
+		elif curr_container is self.val:
+			return self.val
+		else: # curr_container is outside of this token
+			return curr_container
+	
+	def get_down(self, curr_container: ContainerToken = None) -> ContainerToken:
+		global cursor_pos
+		if curr_container is None:
+			return self.val
+		elif curr_container is self.val:
+			return self.val
+		else: # curr_container is outside of this token
+			return curr_container
+	
+	def __repr__(self) -> str:
+		return f"{self.__class__.__name__}({hash(self.parent)},{self.index},{repr(self.val)})"
 
 class ExactToken(Token):
 	def __init__(self, parent: ContainerToken, index: int = -1, val: str = "this needs to be filled") -> None:
@@ -182,6 +290,9 @@ class ExactToken(Token):
 				return r"\pi"
 			case "E":
 				return "e"
+	
+	def __repr__(self) -> str:
+		return f"{self.__class__.__name__}({hash(self.parent)},{self.index},{self.val})"
 
 class OperatorToken(Token):
 	def __init__(self, parent: ContainerToken, index: int = -1, val: str = "this needs to be filled") -> None:
@@ -213,6 +324,9 @@ class OperatorToken(Token):
 				return r"\div"
 			case _:
 				return "oops"
+	
+	def __repr__(self) -> str:
+		return f"{self.__class__.__name__}({hash(self.parent)},{self.index},{self.val})"
 
 class FractionToken(OperatorToken, HasContainer):
 	def __init__(self, parent: ContainerToken, index: int = -1, top_children: list[Token] = None, bottom_children: list[Token] = None) -> None:
@@ -242,7 +356,6 @@ class FractionToken(OperatorToken, HasContainer):
 			cursor_pos = len(self.top.children) - 1
 			return self.top
 			
-	
 	def get_right(self, curr_container: ContainerToken = None) -> ContainerToken:
 		global cursor_pos
 		if curr_container is self.top or curr_container is self.bottom:
@@ -311,6 +424,9 @@ class FractionToken(OperatorToken, HasContainer):
 			else:
 				cursor_pos = min(cursor_pos, len(self.bottom.children) - 1)
 				return self.bottom
+	
+	def __repr__(self) -> str:
+		return f"{self.__class__.__name__}({hash(self.parent)},{self.index},{repr(self.top)},{repr(self.bottom)})"
 
 class SubSuperScript(Token, HasContainer):
 	def __init__(self, parent: ContainerToken, index: int = -1, inner_children: list[Token] = None, sub_children: list[Token] = None,
@@ -325,15 +441,6 @@ class SubSuperScript(Token, HasContainer):
 		self.inner: ContainerToken = ContainerToken(parent, inner_children, self)
 		self.sub: ContainerToken = ContainerToken(parent, sub_children, self)
 		self.super: ContainerToken = ContainerToken(parent, super_children, self)
-		for i, child in enumerate(self.inner.children):
-			child.parent = self.inner
-			child.index = i
-		for i, child in enumerate(self.sub.children):
-			child.parent = self.sub
-			child.index = i
-		for i, child in enumerate(self.super.children):
-			child.parent = self.super
-			child.index = i
 	
 	def __str__(self) -> str:
 		return f"({self.inner})_{{{self.sub}}}^{{{self.super}}}"
@@ -368,8 +475,8 @@ class SubSuperScript(Token, HasContainer):
 				else:
 					return outer_left
 			else:
-				cursor_pos = len(self.inner.children) - 1
-				return self.inner
+				cursor_pos = self.index - 1
+				return self.parent
 		else: # curr container is something else
 			cursor_pos = len(self.super.children) - 1
 			return self.super
@@ -401,8 +508,8 @@ class SubSuperScript(Token, HasContainer):
 				else:
 					return outer_right
 			else:
-				cursor_pos = -1
-				return self.super
+				cursor_pos = self.index
+				return self.parent
 		else: # curr container is something else
 			cursor_pos = -1
 			return self.inner
@@ -472,6 +579,9 @@ class SubSuperScript(Token, HasContainer):
 			else: # if it's something else
 				cursor_pos = min(cursor_pos, len(self.sub.children) - 1)
 				return self.sub
+	
+	def __repr__(self) -> str:
+		return f"{self.__class__.__name__}({hash(self.parent)},{self.index},{repr(self.inner)},{repr(self.super)},{repr(self.sub)})"
 
 class PowerToken(SubSuperScript, OperatorToken):
 	def __init__(self, parent: ContainerToken, index: int = -1, inner_children: list[Token] = None,
@@ -514,6 +624,9 @@ class PowerToken(SubSuperScript, OperatorToken):
 			else: # if it's something else
 				cursor_pos = min(cursor_pos, len(self.inner.children) - 1)
 				return self.inner
+	
+	def __repr__(self) -> str:
+		return f"{self.__class__.__name__}({hash(self.parent)},{self.index},{repr(self.inner)},{repr(self.super)})"
 
 class RootToken(PowerToken):
 	def __init__(self, parent: ContainerToken, index: int = -1, inner_children: list[Token] = None,
@@ -592,6 +705,9 @@ class RootToken(PowerToken):
 		else: # curr container is something else
 			cursor_pos = -1
 			return self.super
+	
+	def __repr__(self) -> str:
+		return f"{self.__class__.__name__}({hash(self.parent)},{self.index},{repr(self.inner)},{repr(self.super)})"
 
 calculation: ContainerToken = ContainerToken()
 curr_token: ContainerToken = calculation
@@ -641,23 +757,6 @@ def solve(exact: bool = True) -> None:
 # 	expr = parse_expr(str_tokens, evaluate=False, transformations=transformations)
 # 	return latex(expr, mul_symbol="times")
 
-def add_token_at_cursor(token: Token) -> None:
-	global curr_token
-	global cursor_pos
-	cursor_pos += 1
-	insert_token_in_container(token, curr_token, cursor_pos)
-
-def insert_token_in_container(token: Token, container: ContainerToken, index: int = -1) -> None:
-	if index == -1:
-		container.children.append(token)
-	else:
-		container.children.insert(index, token)
-		for token in container.children[index + 1:]:
-			token.index += 1
-	token.parent = container
-	token.index = index
-	
-
 def add_to_calc(token_type: Type[Token], *token_args) -> None:
 	global calculation
 	global cursor_pos
@@ -677,42 +776,79 @@ def add_to_calc(token_type: Type[Token], *token_args) -> None:
 		prev_token = curr_token.children[cursor_pos]
 		next_token = None if cursor_pos + 1 >= len(curr_token.children) else curr_token.children[cursor_pos+1]
 		token: Token = token_type(curr_token, cursor_pos + 1, *token_args)
-		if isinstance(token, NumberToken):
-			if isinstance(prev_token, NumberToken):
-				prev_token.val *= 10
-				prev_token.val += token.val
+		assert not isinstance(token, NumberToken)
+		if isinstance(token, DigitToken):
+			if isinstance(curr_token, NumberToken):
+				curr_token.val.add_child(token, cursor_pos + 1)
+				cursor_pos += 1
+			elif isinstance(prev_token, DigitToken):
+				new_token: NumberToken = NumberToken.from_number(curr_token, cursor_pos, prev_token.val * 10 + token.val)
+				curr_token.children.pop(cursor_pos)
+				curr_token.children.insert(cursor_pos, new_token)
+				curr_token = new_token.val
+				cursor_pos = len(curr_token.children) - 1
+			elif isinstance(prev_token, NumberToken):
+				prev_token.val.children.append(token)
+				token.index = len(prev_token.val.children) - 1
+				token.parent = prev_token.val
+				curr_token = prev_token.val
+				cursor_pos = len(curr_token.children) - 1
 			elif isinstance(prev_token, OperatorToken):
-				add_token_at_cursor(token)
-		elif isinstance(token, OperatorToken):
-			if isinstance(token, FractionToken):
-				if isinstance(prev_token, NumberToken | FractionToken | SubSuperScript):
-					insert_token_in_container(prev_token, token.top)
-					token.index -= 1
-					curr_token.children.pop(cursor_pos)
-					curr_token.children.insert(cursor_pos, token)
-					curr_token = token.bottom
-				else:
-					add_token_at_cursor(token)
-					curr_token = token.top
-				cursor_pos = -1
-			elif isinstance(token, PowerToken):
-				if isinstance(prev_token, NumberToken | FractionToken | SubSuperScript):
-					insert_token_in_container(prev_token, token.inner)
-					token.index -= 1
-					curr_token.children.pop(cursor_pos)
-					curr_token.children.insert(cursor_pos, token)
-					if len(token.super.children) == 0:
-						curr_token = token.super
-						cursor_pos = -1
-					else:
-						curr_token = token.inner
-						cursor_pos = 0
-				else:
-					add_token_at_cursor(token)
-					curr_token = token.inner
-					cursor_pos = -1
+				curr_token.add_child(token, cursor_pos + 1)
+				cursor_pos += 1
 			else:
-				add_token_at_cursor(token)
+				raise Exception("wtf number")
+		else:
+			if isinstance(curr_token.owner_token, NumberToken):
+				print("HELLLLLLLLLLLLLLLo")
+				parent: ContainerToken = curr_token.parent
+				p_index: int = curr_token.owner_token.index
+				number_split: NumberToken = parent.children.pop(p_index)
+				assert isinstance(number_split, NumberToken)
+				split_num_1: str = "".join([str(t) for t in number_split.val.children[:cursor_pos-1]])
+				split_num_2: str = "".join([str(t) for t in number_split.val.children[cursor_pos-1:]])
+				if len(split_num_1) == 1:
+					parent.add_child(DigitToken(None, val=int(split_num_1)), p_index)
+				elif len(split_num_1) > 1:
+					parent.add_child(NumberToken.from_number(None, val=int(split_num_1)), p_index)
+				if len(split_num_2) == 1:
+					parent.add_child(DigitToken(None, val=int(split_num_2)), p_index + 2)
+				elif len(split_num_2) > 1:
+					parent.add_child(NumberToken.from_number(None, val=int(split_num_2)), p_index + 2)
+				curr_token = parent
+				cursor_pos = p_index
+			
+			if isinstance(token, OperatorToken):
+				if isinstance(token, FractionToken):
+					if isinstance(prev_token, DigitToken | NumberToken | FractionToken | SubSuperScript):
+						token.top.add_child(prev_token)
+						token.index -= 1
+						curr_token.children.pop(cursor_pos)
+						curr_token.children.insert(cursor_pos, token)
+						curr_token = token.bottom
+					else:
+						curr_token.add_child(token, cursor_pos + 1)
+						curr_token = token.top
+					cursor_pos = -1
+				elif isinstance(token, PowerToken):
+					if isinstance(prev_token, DigitToken | NumberToken | FractionToken | SubSuperScript):
+						token.inner.add_child(prev_token)
+						token.index -= 1
+						curr_token.children.pop(cursor_pos)
+						curr_token.children.insert(cursor_pos, token)
+						if len(token.super.children) == 0:
+							curr_token = token.super
+							cursor_pos = -1
+						else:
+							curr_token = token.inner
+							cursor_pos = 0
+					else:
+						curr_token.add_child(token, cursor_pos + 1)
+						curr_token = token.inner
+						cursor_pos = -1
+				else:
+					curr_token.add_child(token, cursor_pos + 1)
+					cursor_pos += 1
 		
 	
 	latex_string = calculation.latex()
@@ -754,18 +890,13 @@ def move_cursor(x: int, y: int) -> None:
 						else: # if can pass next token without going into it; next token has no containers
 							cursor_pos += x_sign
 			else: # if token is empty
-				if isinstance(curr_token, ContainerToken) and isinstance(curr_token.parent, HasContainer):
+				if isinstance(curr_token.owner_token, HasContainer):
 					if x_sign == 1:
-						curr_token = curr_token.parent.get_right(curr_token.owner_token)
+						curr_token = curr_token.owner_token.get_right(curr_token)
 					else: # x_sign == -1
-						cursor_pos += curr_token.parent.get_left(curr_token.owner_token)
+						curr_token = curr_token.owner_token.get_left(curr_token)
 				else:
-					raise Exception("Cursor got stuck LMAO D:")
-				
-				
-		
-					
-				
+					Exception("Cursor got stuck")
 		x -= x_sign
 	while y != 0:
 		if not isinstance(curr_token.owner_token, FractionToken | SubSuperScript):
@@ -783,6 +914,7 @@ def move_cursor(x: int, y: int) -> None:
 	
 	latex_string = calculation.latex()
 	text_area.display_latex(latex_string)
+	print(repr(calculation))
 
 def backspace_calc() -> None:
 	pass
@@ -945,23 +1077,23 @@ ui: dict[tk.Frame, list[tuple[int, int, ButtonConfig]]] = {
 		(0, 3, AddButtonConfig("×", OperatorToken, "*")),
 		(0, 4, AddButtonConfig("⬚\n—\n⬚", FractionToken, font=small_font)),
 		# (0, 5, AddButtonConfig(")")),
-		(0, 6, AddButtonConfig("7", NumberToken, 7)),
-		(0, 7, AddButtonConfig("8", NumberToken, 8)),
-		(0, 8, AddButtonConfig("9", NumberToken, 9)),
+		(0, 6, AddButtonConfig("7", DigitToken, 7)),
+		(0, 7, AddButtonConfig("8", DigitToken, 8)),
+		(0, 8, AddButtonConfig("9", DigitToken, 9)),
 		(1, 0, AddButtonConfig("⬚ⁿ", PowerToken)),
-		(1, 1, AddButtonConfig("⬚²", PowerToken, None, [NumberToken(None, val=2)])),
-		(1, 2, AddButtonConfig("²√⬚", RootToken, None, [NumberToken(None, val=2)])),
+		(1, 1, AddButtonConfig("⬚²", PowerToken, None, [DigitToken(None, val=2)])),
+		(1, 2, AddButtonConfig("²√⬚", RootToken, None, [DigitToken(None, val=2)])),
 		(1, 3, AddButtonConfig("ⁿ√⬚", RootToken)),
 		(1, 4, AddButtonConfig("(", OperatorToken, "(")),
 		(1, 5, AddButtonConfig(")", OperatorToken, ")")),
-		(1, 6, AddButtonConfig("4", NumberToken, 4)),
-		(1, 7, AddButtonConfig("5", NumberToken, 5)),
-		(1, 8, AddButtonConfig("6", NumberToken, 6)),
+		(1, 6, AddButtonConfig("4", DigitToken, 4)),
+		(1, 7, AddButtonConfig("5", DigitToken, 5)),
+		(1, 8, AddButtonConfig("6", DigitToken, 6)),
 		
 		
-		(2, 6, AddButtonConfig("1", NumberToken, 1)),
-		(2, 7, AddButtonConfig("2", NumberToken, 2)),
-		(2, 8, AddButtonConfig("3", NumberToken, 3)),
+		(2, 6, AddButtonConfig("1", DigitToken, 1)),
+		(2, 7, AddButtonConfig("2", DigitToken, 2)),
+		(2, 8, AddButtonConfig("3", DigitToken, 3)),
 		
 		
 		# (3, 0, AddButtonConfig("π", ExactToken, "pi")),
@@ -969,7 +1101,7 @@ ui: dict[tk.Frame, list[tuple[int, int, ButtonConfig]]] = {
 		(3, 1, FunctionButtonConfig("↑", lambda: move_cursor(0, 1))),
 		
 		(3, 6, FunctionButtonConfig("=", solve)),
-		(3, 7, AddButtonConfig("0", NumberToken, 0)),
+		(3, 7, AddButtonConfig("0", DigitToken, 0)),
 		(3, 8, AddButtonConfig("Ans", ExactToken, "Ans")),
 		
 		(4, 0, FunctionButtonConfig("←", lambda: move_cursor(-1, 0))),
