@@ -117,13 +117,22 @@ class ContainerToken(Token):
 			else:
 				return self.children[0].latex()
 		else:
-			if curr_token is not self:
-				return " ".join([c.latex() for c in self.children])
+			if self.parent is None:
+				if curr_token is not self:
+					return  "".join([c.latex() for c in self.children])
+				else:
+					rv = "|" if cursor_pos == -1 else ""
+					for i, c in enumerate(self.children):
+						rv += c.latex() + ("|" if i == cursor_pos else " ")
+					return rv[0:-1]+("|" if cursor_pos == len(self.children) - 1 else "")
 			else:
-				rv = "|" if cursor_pos == -1 else ""
-				for i, c in enumerate(self.children):
-					rv += c.latex() + ("|" if i == cursor_pos else " ")
-				return rv
+				if curr_token is not self:
+					return "("+" ".join([c.latex() for c in self.children])+")"
+				else:
+					rv = "|" if cursor_pos == -1 else ""
+					for i, c in enumerate(self.children):
+						rv += c.latex() + ("|" if i == cursor_pos else " ")
+					return "("+rv[0:-1]+("|" if cursor_pos == len(self.children) - 1 else "")+")"
 	
 	def __repr__(self) -> str:
 		return f"{self.__class__.__name__}({hash(self.parent)},{[repr(c) for c in self.children]},{hash(self.owner_token)})"
@@ -466,14 +475,7 @@ class SubSuperScript(Token, HasContainer):
 			outer_token = self.parent.owner_token
 			if isinstance(outer_token, HasContainer):
 				outer_left = outer_token.get_left(self.parent)
-				cursor_pos = len(outer_left.children) - 1
-				outer_left_right = outer_left.children[cursor_pos]
-				if isinstance(outer_left_right, HasContainer):
-					rv: ContainerToken = outer_left_right.get_right(None)
-					cursor_pos = len(rv.children) - 1
-					return rv
-				else:
-					return outer_left
+				return outer_left
 			else:
 				cursor_pos = self.index - 1
 				return self.parent
@@ -499,14 +501,7 @@ class SubSuperScript(Token, HasContainer):
 			outer_token = self.parent.owner_token
 			if isinstance(outer_token, HasContainer):
 				outer_right = outer_token.get_right(self.parent)
-				cursor_pos = -1
-				outer_right_left = outer_right.children[cursor_pos]
-				if isinstance(outer_right_left, HasContainer):
-					rv: ContainerToken = outer_right_left.get_left(None)
-					cursor_pos = len(rv.children) - 1
-					return rv
-				else:
-					return outer_right
+				return outer_right
 			else:
 				cursor_pos = self.index
 				return self.parent
@@ -658,17 +653,10 @@ class RootToken(PowerToken):
 			outer_token = self.parent.owner_token
 			if isinstance(outer_token, HasContainer):
 				outer_left = outer_token.get_left(self.parent)
-				cursor_pos = len(outer_left.children) - 1
-				outer_left_right = outer_left.children[cursor_pos]
-				if isinstance(outer_left_right, HasContainer):
-					rv: ContainerToken = outer_left_right.get_right(None)
-					cursor_pos = len(rv.children) - 1
-					return rv
-				else:
-					return outer_left
+				return outer_left
 			else:
-				cursor_pos = len(self.super.children) - 1
-				return self.super
+				cursor_pos = self.index - 1
+				return self.parent
 		else: # curr container is something else
 			cursor_pos = len(self.inner.children) - 1
 			return self.inner
@@ -691,17 +679,10 @@ class RootToken(PowerToken):
 			outer_token = self.parent.owner_token
 			if isinstance(outer_token, HasContainer):
 				outer_right = outer_token.get_right(self.parent)
-				cursor_pos = -1
-				outer_right_left = outer_right.children[cursor_pos]
-				if isinstance(outer_right_left, HasContainer):
-					rv: ContainerToken = outer_right_left.get_left(None)
-					cursor_pos = len(rv.children) - 1
-					return rv
-				else:
-					return outer_right
+				return outer_right
 			else:
-				cursor_pos = -1
-				return self.inner
+				cursor_pos = self.index
+				return self.parent
 		else: # curr container is something else
 			cursor_pos = -1
 			return self.super
@@ -840,8 +821,7 @@ def add_to_calc(token_type: Type[Token], *token_args) -> None:
 							curr_token = token.super
 							cursor_pos = -1
 						else:
-							curr_token = token.inner
-							cursor_pos = 0
+							pass
 					else:
 						curr_token.add_child(token, cursor_pos + 1)
 						curr_token = token.inner
@@ -875,6 +855,7 @@ def move_cursor(x: int, y: int) -> None:
 						next_token = curr_token.children[cursor_pos + 1]
 						if isinstance(next_token, HasContainer):
 							curr_token = next_token.get_right(curr_token)
+							
 						else: # if can pass next token without going into it; next token has no containers
 							cursor_pos += x_sign
 				else: # x_sign == -1
